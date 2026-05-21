@@ -8,7 +8,7 @@ from app.projects import Project
 log = logging.getLogger(__name__)
 
 API_BASE = "https://api.freelancehunt.com/v2"
-WEB_PROJECT_URL = "https://freelancehunt.com/project/{id}"
+WEB_PROJECT_URL = "https://freelancehunt.com/project/{id}.html"
 
 
 class FreelancehuntSource:
@@ -72,7 +72,7 @@ def _to_project(item: dict) -> Project | None:
 
         return Project(
             id=project_id,
-            url=WEB_PROJECT_URL.format(id=project_id),
+            url=_extract_web_url(item, project_id),
             title=name,
             budget=budget,
             description=description,
@@ -83,6 +83,17 @@ def _to_project(item: dict) -> Project | None:
     except Exception:
         log.exception("failed to parse project item: %s", item)
         return None
+
+
+def _extract_web_url(item: dict, project_id: str) -> str:
+    self_link = (item.get("links") or {}).get("self")
+    if isinstance(self_link, dict):
+        web = self_link.get("web")
+        if isinstance(web, str) and web:
+            return web
+    elif isinstance(self_link, str) and self_link:
+        return self_link
+    return WEB_PROJECT_URL.format(id=project_id)
 
 
 def _format_budget(budget: dict | None) -> str:
