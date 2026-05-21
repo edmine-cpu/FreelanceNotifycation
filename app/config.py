@@ -14,7 +14,8 @@ class Settings:
     history_size: int
     listing_url: str
     category_name: str
-    user_agent: str
+    freelancehunt_token: str
+    skill_id: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -31,11 +32,8 @@ class Settings:
                 "https://freelancehunt.com/projects/skill/razrabotka-botov/180.html",
             ),
             category_name=os.environ.get("CATEGORY_NAME", "Разработка ботов"),
-            user_agent=os.environ.get(
-                "USER_AGENT",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            ),
+            freelancehunt_token=_required("FREELANCEHUNT_TOKEN"),
+            skill_id=int(os.environ.get("SKILL_ID", "180")),
         )
 
 

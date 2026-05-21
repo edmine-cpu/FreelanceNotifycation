@@ -1,31 +1,36 @@
 # FreelanceHunt → Telegram (Разработка ботов)
 
-Telegram-бот в Docker. Раз в минуту парсит категорию **«Разработка ботов»**
-на FreelanceHunt и присылает уведомления о новых проектах: заголовок,
-ссылка на проект, бюджет, краткое описание, время публикации и ссылка на
-саму категорию.
+Telegram-бот в Docker. Раз в минуту через **официальное API FreelanceHunt**
+(`api.freelancehunt.com/v2/projects`) берёт открытые проекты в выбранной
+категории (по умолчанию — «Разработка ботов», `skill_id=180`) и присылает
+уведомления о новых: заголовок, ссылка на проект, бюджет, краткое описание,
+время публикации и ссылка на категорию.
 
-Источник: <https://freelancehunt.com/projects/skill/razrabotka-botov/180.html>
+> API выбран вместо парсинга HTML: страница категории закрыта Cloudflare
+> WAF, который режет запросы с дата-центровых IP. API стабильно работает
+> по Bearer-токену.
 
 ## Запуск
 
 1. Создай бота у [@BotFather](https://t.me/BotFather), получи `TELEGRAM_BOT_TOKEN`.
 2. Узнай свой `TELEGRAM_CHAT_ID` (например, через [@userinfobot](https://t.me/userinfobot)).
    Напиши боту `/start` — иначе Telegram не даст слать тебе сообщения.
-3. Скопируй пример конфига и заполни значения:
+3. Получи `FREELANCEHUNT_TOKEN`: <https://freelancehunt.com/my/api> →
+   *Personal Access Token*. Это бесплатно и занимает минуту.
+4. Скопируй пример конфига и заполни значения:
 
    ```sh
    cp .env.example .env
    # отредактируй .env
    ```
 
-4. Запусти:
+5. Запусти:
 
    ```sh
    docker compose up -d --build
    ```
 
-5. Логи:
+6. Логи:
 
    ```sh
    docker compose logs -f
@@ -35,14 +40,16 @@ Telegram-бот в Docker. Раз в минуту парсит категори�
 
 | Переменная                   | По умолчанию | Описание                                                                                              |
 | ---------------------------- | ------------ | ----------------------------------------------------------------------------------------------------- |
-| `TELEGRAM_BOT_TOKEN`         | —            | Токен бота от BotFather                                                                               |
-| `TELEGRAM_CHAT_ID`           | —            | ID чата получателя                                                                                    |
-| `POLL_INTERVAL`              | `60`         | Период опроса в секундах                                                                              |
-| `SEND_EXISTING_ON_FIRST_RUN` | `false`      | При первом запуске прислать все 15 проектов со страницы. По умолчанию они помечаются как уже виденные |
-| `PAGE_SIZE`                  | `5`          | Размер страницы в списке `/start`                                                                     |
-| `HISTORY_SIZE`               | `50`         | Сколько последних проектов хранить для пагинации                                                      |
-| `LISTING_URL`                | (категория ботов) | URL категории FreelanceHunt для парсинга                                                         |
-| `CATEGORY_NAME`              | `Разработка ботов` | Название категории для вывода                                                                  |
+| `TELEGRAM_BOT_TOKEN`         | —                 | Токен бота от BotFather                                                                          |
+| `TELEGRAM_CHAT_ID`           | —                 | ID чата получателя                                                                               |
+| `FREELANCEHUNT_TOKEN`        | —                 | Personal Access Token FreelanceHunt API                                                          |
+| `SKILL_ID`                   | `180`             | ID категории FreelanceHunt (180 = «Разработка ботов»)                                            |
+| `POLL_INTERVAL`              | `60`              | Период опроса API в секундах                                                                     |
+| `SEND_EXISTING_ON_FIRST_RUN` | `false`           | При первом запуске прислать все имеющиеся проекты. По умолчанию они помечаются как уже виденные  |
+| `PAGE_SIZE`                  | `5`               | Размер страницы в списке `/start`                                                                |
+| `HISTORY_SIZE`               | `50`              | Сколько последних проектов хранить для пагинации                                                 |
+| `LISTING_URL`                | (категория ботов) | Веб-URL категории — используется только как ссылка в подвале уведомления                         |
+| `CATEGORY_NAME`              | `Разработка ботов`| Название категории для вывода                                                                    |
 
 ## Команды бота
 
@@ -61,7 +68,7 @@ app/
   logging_setup.py         # configure_logging
   app.py                   # сборка зависимостей и запуск двух потоков
   projects/model.py        # dataclass Project + (de)serialization
-  parser/freelancehunt.py  # FreelancehuntParser: fetch + BeautifulSoup
+  source/freelancehunt.py  # FreelancehuntSource: GET /v2/projects → list[Project]
   storage/state.py         # StateStore: thread-safe persisted JSON (seen + history)
   telegram/
     client.py              # TelegramClient (sendMessage, editMessageText, getUpdates, …)

@@ -7,7 +7,7 @@ from app.handlers import UpdateRouter
 from app.handlers.callbacks import CallbackHandler
 from app.handlers.commands import CommandHandler
 from app.notifier import NotifierLoop
-from app.parser import FreelancehuntParser
+from app.source import FreelancehuntSource
 from app.storage import StateStore
 from app.telegram import TelegramClient, UpdatesPoller
 
@@ -17,14 +17,17 @@ log = logging.getLogger(__name__)
 def run(settings: Settings) -> None:
     client = TelegramClient(settings.telegram_token)
     store = StateStore(settings.state_file, history_size=settings.history_size)
-    parser = FreelancehuntParser(settings.listing_url, settings.user_agent)
+    source = FreelancehuntSource(
+        token=settings.freelancehunt_token,
+        skill_id=settings.skill_id,
+    )
 
     router = UpdateRouter(
         commands=CommandHandler(client, settings),
         callbacks=CallbackHandler(client, store, settings),
     )
     poller = UpdatesPoller(client, router)
-    notifier = NotifierLoop(client, store, parser, settings)
+    notifier = NotifierLoop(client, store, source, settings)
 
     stop_event = threading.Event()
     _install_signal_handlers(stop_event)

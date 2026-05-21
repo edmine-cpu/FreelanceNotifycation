@@ -3,8 +3,8 @@ import threading
 import time
 
 from app.config import Settings
-from app.parser import FreelancehuntParser
 from app.projects import Project
+from app.source import FreelancehuntSource
 from app.storage import StateStore
 from app.telegram import formatting
 from app.telegram.client import TelegramClient, TelegramError
@@ -17,12 +17,12 @@ class NotifierLoop:
         self,
         client: TelegramClient,
         store: StateStore,
-        parser: FreelancehuntParser,
+        source: FreelancehuntSource,
         settings: Settings,
     ) -> None:
         self._client = client
         self._store = store
-        self._parser = parser
+        self._source = source
         self._settings = settings
 
     def run(self, stop_event: threading.Event) -> None:
@@ -36,7 +36,7 @@ class NotifierLoop:
         log.info("notifier loop stopped")
 
     def _tick(self) -> None:
-        projects = self._parser.fetch_projects()
+        projects = self._source.fetch_projects()
         if not projects:
             return
 
