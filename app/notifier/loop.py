@@ -101,6 +101,7 @@ class NotifierLoop:
             order_message = await self._bot.send_message(
                 chat_id=self._settings.telegram_chat_id,
                 text=text,
+                reply_markup=keyboards.notification_keyboard(),
             )
         except TelegramAPIError:
             log.exception("failed to send project %s", project.id)

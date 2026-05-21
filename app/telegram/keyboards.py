@@ -8,8 +8,13 @@ CALLBACK_LIST_PREFIX = "list:"
 CALLBACK_START = "start"
 CALLBACK_NOOP = "noop"
 CALLBACK_REGEN_PREFIX = "regen:"
+CALLBACK_HIDE = "hide"
+CALLBACK_SHOW_PREFIX = "show:"
+CALLBACK_GEN_PREFIX = "gen:"
 
 MAX_BUTTON_TEXT = 60
+
+HIDE_BUTTON_TEXT = "🙈 Скрыть"
 
 
 def start_menu_keyboard() -> InlineKeyboardMarkup:
@@ -30,7 +35,8 @@ def projects_page_keyboard(
     chunk = projects[start : start + page_size]
 
     rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(text=_truncate(p.title), url=p.url)] for p in chunk
+        [InlineKeyboardButton(text=_truncate(p.title), callback_data=f"{CALLBACK_SHOW_PREFIX}{p.id}")]
+        for p in chunk
     ]
 
     prev_cb = f"{CALLBACK_LIST_PREFIX}{page - 1}" if page > 0 else CALLBACK_NOOP
@@ -52,11 +58,34 @@ def empty_history_keyboard() -> InlineKeyboardMarkup:
     )
 
 
+def project_detail_keyboard(project: Project) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔗 Открыть проект", url=project.url)],
+            [InlineKeyboardButton(text="✍️ Сгенерировать ответ", callback_data=f"{CALLBACK_GEN_PREFIX}{project.id}")],
+            [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
+        ]
+    )
+
+
+def notification_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)]]
+    )
+
+
 def regen_bid_keyboard(project_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Перегенерировать", callback_data=f"{CALLBACK_REGEN_PREFIX}{project_id}")]
+            [InlineKeyboardButton(text="🔄 Перегенерировать", callback_data=f"{CALLBACK_REGEN_PREFIX}{project_id}")],
+            [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
         ]
+    )
+
+
+def hide_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)]]
     )
 
 
