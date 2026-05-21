@@ -1,0 +1,10 @@
+services:
+  bot:
+    build: .
+    container_name: fh-bots-notifier
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      STATE_FILE: /data/state.json
+    volumes:
+      - ./data:/data
