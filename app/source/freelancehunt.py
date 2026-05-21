@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-import requests
+import httpx
 
 from app.projects import Project
 
@@ -22,28 +22,30 @@ class FreelancehuntSource:
         token: str,
         skill_id: int,
         page_size: int = 20,
-        timeout: int = 30,
+        timeout: float = 30.0,
     ) -> None:
-        self._token = token
         self._skill_id = skill_id
         self._page_size = page_size
-        self._timeout = timeout
-        self._session = requests.Session()
-        self._session.headers.update(
-            {
+        self._client = httpx.AsyncClient(
+            base_url=API_BASE,
+            timeout=timeout,
+            headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/json",
                 "User-Agent": "freelancehunt-notifier/1.0 (+telegram-bot)",
-            }
+            },
         )
 
-    def fetch_projects(self) -> list[Project]:
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def fetch_projects(self) -> list[Project]:
         params = {
             "filter[skill_id]": self._skill_id,
             "page[size]": self._page_size,
         }
-        resp = self._session.get(f"{API_BASE}/projects", params=params, timeout=self._timeout)
-        if not resp.ok:
+        resp = await self._client.get("/projects", params=params)
+        if resp.status_code >= 400:
             raise RuntimeError(f"FreelanceHunt API {resp.status_code}: {resp.text[:200]}")
         data = resp.json().get("data", [])
         result: list[Project] = []

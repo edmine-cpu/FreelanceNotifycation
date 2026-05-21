@@ -1,3 +1,5 @@
+import asyncio
+
 from app.app import run
 from app.config import Settings
 from app.logging_setup import configure_logging
@@ -5,7 +7,7 @@ from app.logging_setup import configure_logging
 
 def main() -> None:
     configure_logging()
-    run(Settings.from_env())
+    asyncio.run(run(Settings()))
 
 
 if __name__ == "__main__":

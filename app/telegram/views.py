@@ -1,11 +1,12 @@
-"""Shared view builders: text + keyboard pairs used by commands and callbacks."""
+from aiogram.types import InlineKeyboardMarkup
 
 from app.config import Settings
 from app.projects import Project
-from app.telegram import formatting, keyboards
+
+from . import formatting, keyboards
 
 
-def start_view(settings: Settings) -> tuple[str, dict]:
+def start_view(settings: Settings) -> tuple[str, InlineKeyboardMarkup]:
     return formatting.format_start_menu(settings.category_name), keyboards.start_menu_keyboard()
 
 
@@ -13,7 +14,7 @@ def projects_page_view(
     projects: list[Project],
     page: int,
     settings: Settings,
-) -> tuple[str, dict]:
+) -> tuple[str, InlineKeyboardMarkup]:
     if not projects:
         return (
             formatting.format_empty_history(settings.category_name),
