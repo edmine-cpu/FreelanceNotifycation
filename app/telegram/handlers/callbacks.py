@@ -48,7 +48,6 @@ async def handle_list_page(callback: CallbackQuery, settings: Settings, store: S
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_SHOW_PREFIX))
 async def handle_show_project(
     callback: CallbackQuery,
-    settings: Settings,
     store: StateStore,
 ) -> None:
     project_id = (callback.data or "")[len(keyboards.CALLBACK_SHOW_PREFIX):]
@@ -57,9 +56,7 @@ async def handle_show_project(
         await callback.answer("Проект не найден в истории", show_alert=True)
         return
 
-    text = formatting.format_project_notification(
-        project, settings.category_name, settings.listing_url
-    )
+    text = formatting.format_project_notification(project)
     try:
         await callback.message.answer(
             text,

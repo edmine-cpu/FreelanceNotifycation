@@ -13,8 +13,10 @@ log = logging.getLogger(__name__)
 class StateStore:
     """Async, lock-protected persisted state.
 
-    Holds the set of project IDs already announced and a rolling history of
-    the most recent projects (used by the /start menu).
+    Holds the set of project IDs already announced, a rolling history of the
+    most recent projects (used by the /start menu), and a per-skill publish
+    watermark. A category is considered "first seen" until it has a watermark
+    entry — see ``has_watermark``.
     """
 
     def __init__(self, path: Path, history_size: int = 50, seen_size: int = 500) -> None:
@@ -24,8 +26,9 @@ class StateStore:
         self._lock = asyncio.Lock()
         self._seen_ids: list[str] = []
         self._projects: list[Project] = []
-        self._initialized: bool = False
-        self._last_published_ts: int = 0
+        # Watermark per skill_id: the publish timestamp of the last announced
+        # project in that category. Absence of an entry means "not yet seen".
+        self._watermarks: dict[str, int] = {}
         self._load_sync()
 
     def _load_sync(self) -> None:
@@ -38,29 +41,30 @@ class StateStore:
             return
         self._seen_ids = [str(x) for x in data.get("seen_ids", [])]
         self._projects = [Project.from_dict(p) for p in data.get("projects", [])]
-        self._initialized = bool(data.get("initialized", False))
-        self._last_published_ts = int(data.get("last_published_ts", 0))
+        raw_watermark = data.get("last_published_ts", {})
+        if isinstance(raw_watermark, dict):
+            self._watermarks = {str(k): int(v) for k, v in raw_watermark.items()}
+        # Older single-int formats are intentionally dropped: every category is
+        # then treated as first-seen and its current backlog is suppressed
+        # (guarded further by seen_ids) instead of being re-announced.
 
     async def _persist_locked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "initialized": self._initialized,
             "seen_ids": self._seen_ids,
             "projects": [p.to_dict() for p in self._projects],
-            "last_published_ts": self._last_published_ts,
+            "last_published_ts": self._watermarks,
         }
         tmp = self._path.with_suffix(".tmp")
         async with aiofiles.open(tmp, "w", encoding="utf-8") as f:
             await f.write(json.dumps(payload, ensure_ascii=False))
         tmp.replace(self._path)
 
-    @property
-    def initialized(self) -> bool:
-        return self._initialized
+    def has_watermark(self, skill_id: int) -> bool:
+        return str(skill_id) in self._watermarks
 
-    @property
-    def last_published_ts(self) -> int:
-        return self._last_published_ts
+    def last_published_ts(self, skill_id: int) -> int:
+        return self._watermarks.get(str(skill_id), 0)
 
     async def is_seen(self, project_id: str) -> bool:
         async with self._lock:
@@ -70,14 +74,13 @@ class StateStore:
         if not project_ids:
             return
         async with self._lock:
-            seen = set(self._seen_ids)
-            seen.update(project_ids)
-            self._seen_ids = sorted(seen)[-self._seen_size:]
-            await self._persist_locked()
-
-    async def mark_initialized(self) -> None:
-        async with self._lock:
-            self._initialized = True
+            existing = set(self._seen_ids)
+            for project_id in project_ids:
+                if project_id not in existing:
+                    self._seen_ids.append(project_id)
+                    existing.add(project_id)
+            # Keep the most recently seen IDs (insertion order = recency).
+            self._seen_ids = self._seen_ids[-self._seen_size:]
             await self._persist_locked()
 
     async def add_projects(self, projects: list[Project]) -> None:
@@ -102,8 +105,11 @@ class StateStore:
                     return p
             return None
 
-    async def update_last_published_ts(self, ts: int) -> None:
+    async def update_last_published_ts(self, skill_id: int, ts: int) -> None:
+        key = str(skill_id)
         async with self._lock:
-            if ts > self._last_published_ts:
-                self._last_published_ts = ts
+            # Seed the entry on first sight even if ts == 0, so the category is
+            # no longer treated as first-seen on the next tick.
+            if key not in self._watermarks or ts > self._watermarks[key]:
+                self._watermarks[key] = ts
                 await self._persist_locked()

@@ -11,6 +11,9 @@ class Project:
     relative_time: str
     absolute_time: str
     published_ts: int
+    skill_id: int = 0
+    category_name: str = ""
+    category_url: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -26,4 +29,7 @@ class Project:
             relative_time=data.get("relative_time", ""),
             absolute_time=data.get("absolute_time", ""),
             published_ts=int(data.get("published_ts", 0)),
+            skill_id=int(data.get("skill_id", 0)),
+            category_name=data.get("category_name", ""),
+            category_url=data.get("category_url", ""),
         )

@@ -17,7 +17,7 @@ async def run(settings: Settings) -> None:
     store = StateStore(settings.state_file, history_size=settings.history_size)
     source = FreelancehuntSource(
         token=settings.freelancehunt_token.get_secret_value(),
-        skill_id=settings.skill_id,
+        categories=settings.categories,
     )
 
     bid_generator: BidGenerator | None = None

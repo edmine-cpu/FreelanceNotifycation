@@ -1,9 +1,10 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 
 import httpx
 
-from app.projects import Project
+from app.projects import Category, Project
 
 log = logging.getLogger(__name__)
 
@@ -12,19 +13,20 @@ WEB_PROJECT_URL = "https://freelancehunt.com/project/{id}.html"
 
 
 class FreelancehuntSource:
-    """Fetches open projects in a given skill from the FreelanceHunt API.
+    """Fetches open projects for one or more skills from the FreelanceHunt API.
 
-    Docs: https://apidocs.freelancehunt.com/
+    Each watched category is queried separately and the fetched projects are
+    tagged with the category they came from. Docs: https://apidocs.freelancehunt.com/
     """
 
     def __init__(
         self,
         token: str,
-        skill_id: int,
+        categories: list[Category],
         page_size: int = 20,
         timeout: float = 30.0,
     ) -> None:
-        self._skill_id = skill_id
+        self._categories = categories
         self._page_size = page_size
         self._client = httpx.AsyncClient(
             base_url=API_BASE,
@@ -40,8 +42,24 @@ class FreelancehuntSource:
         await self._client.aclose()
 
     async def fetch_projects(self) -> list[Project]:
+        results = await asyncio.gather(
+            *(self._fetch_category(category) for category in self._categories),
+            return_exceptions=True,
+        )
+        projects: list[Project] = []
+        for category, result in zip(self._categories, results):
+            if isinstance(result, Exception):
+                log.error(
+                    "failed to fetch category %s (skill %d): %s",
+                    category.name, category.skill_id, result,
+                )
+                continue
+            projects.extend(result)
+        return projects
+
+    async def _fetch_category(self, category: Category) -> list[Project]:
         params = {
-            "filter[skill_id]": self._skill_id,
+            "filter[skill_id]": category.skill_id,
             "page[size]": self._page_size,
         }
         resp = await self._client.get("/projects", params=params)
@@ -50,13 +68,13 @@ class FreelancehuntSource:
         data = resp.json().get("data", [])
         result: list[Project] = []
         for item in data:
-            project = _to_project(item)
+            project = _to_project(item, category)
             if project is not None:
                 result.append(project)
         return result
 
 
-def _to_project(item: dict) -> Project | None:
+def _to_project(item: dict, category: Category) -> Project | None:
     try:
         project_id = str(item["id"])
         attrs = item.get("attributes", {})
@@ -79,6 +97,9 @@ def _to_project(item: dict) -> Project | None:
             relative_time=relative_time,
             absolute_time=absolute_time,
             published_ts=published_ts,
+            skill_id=category.skill_id,
+            category_name=category.name,
+            category_url=category.listing_url,
         )
     except Exception:
         log.exception("failed to parse project item: %s", item)

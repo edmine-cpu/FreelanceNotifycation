@@ -5,7 +5,7 @@ from app.projects import Project
 MAX_DESC = 300
 
 
-def format_project_notification(project: Project, category_name: str, listing_url: str) -> str:
+def format_project_notification(project: Project) -> str:
     parts = [f'🆕 <a href="{html.escape(project.url, quote=True)}"><b>{html.escape(project.title)}</b></a>']
 
     if project.budget:
@@ -25,27 +25,31 @@ def format_project_notification(project: Project, category_name: str, listing_ur
     if time_bits:
         parts.append("🕒 " + " ".join(time_bits))
 
-    parts.append(f'📂 <a href="{html.escape(listing_url, quote=True)}">{html.escape(category_name)}</a>')
+    if project.category_name:
+        category = html.escape(project.category_name)
+        if project.category_url:
+            category = f'<a href="{html.escape(project.category_url, quote=True)}">{category}</a>'
+        parts.append(f"📂 {category}")
     return "\n\n".join(parts)
 
 
-def format_start_menu(category_name: str) -> str:
+def format_start_menu(category_label: str) -> str:
     return (
-        f"Привет! Это бот для категории <b>{html.escape(category_name)}</b> на FreelanceHunt.\n\n"
+        f"Привет! Это бот для категорий <b>{html.escape(category_label)}</b> на FreelanceHunt.\n\n"
         "Я раз в минуту проверяю новые проекты и присылаю уведомления.\n"
         "Можешь посмотреть последние из истории кнопкой ниже."
     )
 
 
-def format_projects_page_header(category_name: str, page: int, total_pages: int, total: int) -> str:
+def format_projects_page_header(category_label: str, page: int, total_pages: int, total: int) -> str:
     return (
-        f"<b>Последние проекты</b> — {html.escape(category_name)}\n"
+        f"<b>Последние проекты</b> — {html.escape(category_label)}\n"
         f"Всего: {total} · страница {page + 1}/{max(total_pages, 1)}"
     )
 
 
-def format_empty_history(category_name: str) -> str:
+def format_empty_history(category_label: str) -> str:
     return (
-        f"Пока в истории нет проектов из категории <b>{html.escape(category_name)}</b>.\n"
+        f"Пока в истории нет проектов из категорий <b>{html.escape(category_label)}</b>.\n"
         "Подожди до следующей проверки — и они появятся здесь."
     )

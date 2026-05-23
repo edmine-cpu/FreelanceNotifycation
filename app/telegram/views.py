@@ -7,7 +7,7 @@ from . import formatting, keyboards
 
 
 def start_view(settings: Settings) -> tuple[str, InlineKeyboardMarkup]:
-    return formatting.format_start_menu(settings.category_name), keyboards.start_menu_keyboard()
+    return formatting.format_start_menu(settings.category_label), keyboards.start_menu_keyboard()
 
 
 def projects_page_view(
@@ -17,7 +17,7 @@ def projects_page_view(
 ) -> tuple[str, InlineKeyboardMarkup]:
     if not projects:
         return (
-            formatting.format_empty_history(settings.category_name),
+            formatting.format_empty_history(settings.category_label),
             keyboards.empty_history_keyboard(),
         )
 
@@ -27,7 +27,7 @@ def projects_page_view(
     page = max(0, min(page, total_pages - 1))
 
     text = formatting.format_projects_page_header(
-        settings.category_name, page, total_pages, total
+        settings.category_label, page, total_pages, total
     )
     markup = keyboards.projects_page_keyboard(projects, page, page_size)
     return text, markup

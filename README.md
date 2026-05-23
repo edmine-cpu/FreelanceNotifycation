@@ -1,10 +1,12 @@
-# FreelanceHunt → Telegram (Разработка ботов)
+# FreelanceHunt → Telegram
 
 Telegram-бот в Docker. Раз в минуту через **официальное API FreelanceHunt**
-(`api.freelancehunt.com/v2/projects`) берёт открытые проекты в выбранной
-категории (по умолчанию — «Разработка ботов», `skill_id=180`) и присылает
-уведомления о новых: заголовок, ссылка на проект, бюджет, краткое описание,
-время публикации и ссылка на категорию.
+(`api.freelancehunt.com/v2/projects`) берёт открытые проекты в выбранных
+категориях (список `skill_id` в `SKILL_IDS`, по умолчанию «Веб-программирование»
+`99` и «Разработка ботов» `180`) и присылает уведомления о новых: заголовок,
+ссылка на проект, бюджет, краткое описание, время публикации и ссылка на
+категорию. Каждая категория запрашивается отдельно, и проекты помечаются своей
+категорией.
 
 К каждому уведомлению бот **reply'ом** присылает черновик ставки,
 сгенерированный Gemini в стиле твоих прошлых заявок. В строке цены и срока
@@ -49,17 +51,22 @@ Telegram-бот в Docker. Раз в минуту через **официаль�
 | `TELEGRAM_BOT_TOKEN`         | —                  | Токен бота от BotFather                                                                 |
 | `TELEGRAM_CHAT_ID`           | —                  | ID чата получателя                                                                      |
 | `FREELANCEHUNT_TOKEN`        | —                  | Personal Access Token FreelanceHunt API                                                 |
-| `SKILL_ID`                   | `180`              | ID категории FreelanceHunt (180 = «Разработка ботов»)                                   |
+| `SKILL_IDS`                  | `180`              | Список ID категорий FreelanceHunt через запятую, напр. `99,180` (99 = «Веб-программирование», 180 = «Разработка ботов») |
 | `POLL_INTERVAL`              | `60`               | Период опроса API в секундах                                                            |
 | `SEND_EXISTING_ON_FIRST_RUN` | `false`            | При первом запуске прислать все имеющиеся проекты                                       |
 | `PAGE_SIZE`                  | `5`                | Размер страницы в списке `/start`                                                       |
 | `HISTORY_SIZE`               | `50`               | Сколько последних проектов хранить для пагинации                                        |
-| `LISTING_URL`                | (категория ботов)  | Веб-URL категории                                                                       |
-| `CATEGORY_NAME`              | `Разработка ботов` | Название категории для вывода                                                           |
 | `GEMINI_API_KEY`             | —                  | Ключ Google AI Studio. Если пустой — генерация ставок выключена                         |
 | `GEMINI_MODEL`               | `gemini-2.5-flash` | Имя модели Gemini                                                                       |
 | `GEMINI_ENABLED`             | `true`             | Глобальный тоггл генерации ставок                                                       |
 | `GEMINI_TIMEOUT_SEC`         | `20`               | Таймаут запроса к Gemini API                                                            |
+
+### Добавить категорию
+
+Допиши её `skill_id` в `SKILL_IDS` (через запятую) — URL категории и запрос к
+API строятся автоматически. Чтобы в уведомлении показывалось человекочитаемое
+имя, добавь пару `skill_id: "Название"` в `SKILL_NAMES` (`app/config.py`); иначе
+выводится `Категория #<id>`.
 
 ## Команды бота
 
@@ -77,7 +84,8 @@ app/
   logging_setup.py                # configure_logging
   app.py                          # сборка зависимостей, asyncio.gather, signal handlers
   projects/model.py               # dataclass Project + (de)serialization
-  source/freelancehunt.py         # FreelancehuntSource на httpx.AsyncClient
+  projects/category.py            # dataclass Category (skill_id, name, listing_url)
+  source/freelancehunt.py         # FreelancehuntSource: запрос по каждой категории через httpx.AsyncClient
   storage/state.py                # StateStore: asyncio.Lock + aiofiles
   telegram/
     bot.py                        # фабрика Bot + Dispatcher (aiogram 3)
@@ -102,8 +110,11 @@ app/
 
 Хранится в `./data/state.json` (примонтирован как том):
 
-- `seen_ids` — ID уже отправленных проектов (последние 500);
+- `seen_ids` — ID уже отправленных проектов (последние 500, по свежести);
 - `projects` — последние `HISTORY_SIZE` проектов для пагинации в `/start`
   (по умолчанию 50, также используется для перегенерации ставки);
-- `initialized` — флаг первого запуска;
-- `last_published_ts` — водяной знак времени публикации последнего обработанного проекта.
+- `last_published_ts` — водяной знак времени публикации последнего обработанного
+  проекта **по каждой категории** (`{skill_id: ts}`). Категория без своей записи
+  считается «впервые увиденной»: её текущий бэклог гасится (или рассылается, если
+  `SEND_EXISTING_ON_FIRST_RUN=true`), после чего пишется watermark. Старый формат
+  (одно число) игнорируется — это безопасно (бэклог гасится, а не шлётся заново).
