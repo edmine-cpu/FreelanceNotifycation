@@ -90,8 +90,16 @@ class StateStore:
             merged: dict[str, Project] = {p.id: p for p in self._projects}
             for p in projects:
                 merged[p.id] = p
-            ordered = sorted(merged.values(), key=lambda p: p.published_ts, reverse=True)
-            self._projects = ordered[: self._history_size]
+            # Keep the most recent history_size projects PER category, so a busy
+            # category can't evict another's history out of the /start menu.
+            per_skill: dict[int, list[Project]] = {}
+            for p in merged.values():
+                per_skill.setdefault(p.skill_id, []).append(p)
+            kept: list[Project] = []
+            for group in per_skill.values():
+                group.sort(key=lambda p: p.published_ts, reverse=True)
+                kept.extend(group[: self._history_size])
+            self._projects = sorted(kept, key=lambda p: p.published_ts, reverse=True)
             await self._persist_locked()
 
     async def recent_projects(self) -> list[Project]:

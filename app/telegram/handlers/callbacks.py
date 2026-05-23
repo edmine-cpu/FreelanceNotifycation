@@ -38,9 +38,9 @@ async def handle_start_menu(callback: CallbackQuery, settings: Settings) -> None
 
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_LIST_PREFIX))
 async def handle_list_page(callback: CallbackQuery, settings: Settings, store: StateStore) -> None:
-    page = _parse_page(callback.data or "")
+    filter_key, page = _parse_list_data(callback.data or "")
     projects = await store.recent_projects()
-    text, markup = projects_page_view(projects, page, settings)
+    text, markup = projects_page_view(projects, page, settings, filter_key)
     await _safe_edit(callback, text, markup)
     await callback.answer()
 
@@ -150,9 +150,15 @@ async def _safe_edit(callback: CallbackQuery, text: str, markup) -> None:
         log.exception("editMessageText failed")
 
 
-def _parse_page(data: str) -> int:
-    raw = data[len(keyboards.CALLBACK_LIST_PREFIX):]
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return 0
+def _parse_list_data(data: str) -> tuple[str, int]:
+    """Parse a `list:<filter>:<page>` callback into (filter_key, page)."""
+    body = data[len(keyboards.CALLBACK_LIST_PREFIX):]
+    parts = body.split(":")
+    filter_key = parts[0] if parts and parts[0] else keyboards.LIST_FILTER_ALL
+    page = 0
+    if len(parts) > 1:
+        try:
+            page = max(0, int(parts[1]))
+        except ValueError:
+            page = 0
+    return filter_key, page

@@ -1,9 +1,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from app.projects import Project
+from app.projects import Category, Project
 
-CALLBACK_OPEN_LIST = "list:0"
 CALLBACK_LIST_PREFIX = "list:"
 CALLBACK_START = "start"
 CALLBACK_NOOP = "noop"
@@ -12,21 +10,39 @@ CALLBACK_HIDE = "hide"
 CALLBACK_SHOW_PREFIX = "show:"
 CALLBACK_GEN_PREFIX = "gen:"
 
+# Filter key used in `list:<filter>:<page>` callbacks to mean "every category".
+LIST_FILTER_ALL = "all"
+
 MAX_BUTTON_TEXT = 60
 
 HIDE_BUTTON_TEXT = "🙈 Скрыть"
 
 
-def start_menu_keyboard() -> InlineKeyboardMarkup:
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📋 Последние проекты", callback_data=CALLBACK_OPEN_LIST)
-    return builder.as_markup()
+def list_callback(filter_key: str, page: int) -> str:
+    return f"{CALLBACK_LIST_PREFIX}{filter_key}:{page}"
+
+
+def start_menu_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=f"📂 {_truncate(category.name)}",
+                callback_data=list_callback(str(category.skill_id), 0),
+            )
+        ]
+        for category in categories
+    ]
+    rows.append(
+        [InlineKeyboardButton(text="📋 Все", callback_data=list_callback(LIST_FILTER_ALL, 0))]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def projects_page_keyboard(
     projects: list[Project],
     page: int,
     page_size: int,
+    filter_key: str,
 ) -> InlineKeyboardMarkup:
     total = len(projects)
     total_pages = max(1, (total + page_size - 1) // page_size)
@@ -39,8 +55,8 @@ def projects_page_keyboard(
         for p in chunk
     ]
 
-    prev_cb = f"{CALLBACK_LIST_PREFIX}{page - 1}" if page > 0 else CALLBACK_NOOP
-    next_cb = f"{CALLBACK_LIST_PREFIX}{page + 1}" if page < total_pages - 1 else CALLBACK_NOOP
+    prev_cb = list_callback(filter_key, page - 1) if page > 0 else CALLBACK_NOOP
+    next_cb = list_callback(filter_key, page + 1) if page < total_pages - 1 else CALLBACK_NOOP
     rows.append(
         [
             InlineKeyboardButton(text="« назад" if page > 0 else "·", callback_data=prev_cb),
