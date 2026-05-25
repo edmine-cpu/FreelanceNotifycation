@@ -3,6 +3,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from app.projects import Category, Project
 
 CALLBACK_LIST_PREFIX = "list:"
+CALLBACK_RAW_PREFIX = "raw:"
 CALLBACK_START = "start"
 CALLBACK_NOOP = "noop"
 CALLBACK_REGEN_PREFIX = "regen:"
@@ -22,13 +23,23 @@ def list_callback(filter_key: str, page: int) -> str:
     return f"{CALLBACK_LIST_PREFIX}{filter_key}:{page}"
 
 
+def raw_callback(skill_id: int, page: int) -> str:
+    return f"{CALLBACK_RAW_PREFIX}{skill_id}:{page}"
+
+
 def start_menu_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
+    # Per category, two buttons in one row: 📂 = filtered (passed the primary
+    # check, from cache), 🔴 = unfiltered (live fetch, everything).
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
                 text=f"📂 {_truncate(category.name)}",
                 callback_data=list_callback(str(category.skill_id), 0),
-            )
+            ),
+            InlineKeyboardButton(
+                text=f"🔴 {_truncate(category.name)}",
+                callback_data=raw_callback(category.skill_id, 0),
+            ),
         ]
         for category in categories
     ]
@@ -43,6 +54,7 @@ def projects_page_keyboard(
     page: int,
     page_size: int,
     filter_key: str,
+    raw: bool = False,
 ) -> InlineKeyboardMarkup:
     total = len(projects)
     total_pages = max(1, (total + page_size - 1) // page_size)
@@ -55,8 +67,12 @@ def projects_page_keyboard(
         for p in chunk
     ]
 
-    prev_cb = list_callback(filter_key, page - 1) if page > 0 else CALLBACK_NOOP
-    next_cb = list_callback(filter_key, page + 1) if page < total_pages - 1 else CALLBACK_NOOP
+    # In raw mode filter_key is the skill_id; navigation re-enters the live view.
+    def nav(target_page: int) -> str:
+        return raw_callback(int(filter_key), target_page) if raw else list_callback(filter_key, target_page)
+
+    prev_cb = nav(page - 1) if page > 0 else CALLBACK_NOOP
+    next_cb = nav(page + 1) if page < total_pages - 1 else CALLBACK_NOOP
     rows.append(
         [
             InlineKeyboardButton(text="« назад" if page > 0 else "·", callback_data=prev_cb),

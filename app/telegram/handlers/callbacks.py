@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery
 from app.config import Settings
 from app.ai import BidGenerator, BidGenerationError
 from app.llm import QuotaExceededError
+from app.source import FreelancehuntSource
 from app.storage import StateStore
 
 from .. import formatting, keyboards
@@ -43,7 +44,31 @@ async def handle_start_menu(callback: CallbackQuery, settings: Settings) -> None
 async def handle_list_page(callback: CallbackQuery, settings: Settings, store: StateStore) -> None:
     filter_key, page = _parse_list_data(callback.data or "")
     projects = await store.recent_projects()
-    text, markup = projects_page_view(projects, page, settings, filter_key)
+    passed = await store.passed_ids()
+    text, markup = projects_page_view(projects, page, settings, filter_key, passed_ids=passed)
+    await _safe_edit(callback, text, markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(keyboards.CALLBACK_RAW_PREFIX))
+async def handle_raw_page(
+    callback: CallbackQuery,
+    settings: Settings,
+    store: StateStore,
+    source: FreelancehuntSource,
+) -> None:
+    skill_id, page = _parse_raw_data(callback.data or "")
+    # Live, unfiltered view: fetch the category fresh on entry (page 0) and merge
+    # new projects into the cache so Show/Generate can find them later. On a
+    # fetch error, fall back to the cached history rather than failing the tap.
+    try:
+        fetched = await source.fetch_category(skill_id)
+        await store.add_projects(fetched)
+        projects = fetched
+    except Exception:
+        log.exception("raw fetch failed for skill %s", skill_id)
+        projects = [p for p in await store.recent_projects() if p.skill_id == skill_id]
+    text, markup = projects_page_view(projects, page, settings, str(skill_id), unfiltered=True)
     await _safe_edit(callback, text, markup)
     await callback.answer()
 
@@ -178,3 +203,20 @@ def _parse_list_data(data: str) -> tuple[str, int]:
         except ValueError:
             page = 0
     return filter_key, page
+
+
+def _parse_raw_data(data: str) -> tuple[int, int]:
+    """Parse a `raw:<skill_id>:<page>` callback into (skill_id, page)."""
+    body = data[len(keyboards.CALLBACK_RAW_PREFIX):]
+    parts = body.split(":")
+    try:
+        skill_id = int(parts[0])
+    except (ValueError, IndexError):
+        skill_id = 0
+    page = 0
+    if len(parts) > 1:
+        try:
+            page = max(0, int(parts[1]))
+        except ValueError:
+            page = 0
+    return skill_id, page

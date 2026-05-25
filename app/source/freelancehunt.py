@@ -57,6 +57,14 @@ class FreelancehuntSource:
             projects.extend(result)
         return projects
 
+    async def fetch_category(self, skill_id: int) -> list[Project]:
+        """Fetch the current open projects for a single watched skill. Used by the
+        /start menu's unfiltered (🔴) view for a live, on-demand refresh."""
+        category = next((c for c in self._categories if c.skill_id == skill_id), None)
+        if category is None:
+            return []
+        return await self._fetch_category(category)
+
     async def _fetch_category(self, category: Category) -> list[Project]:
         params = {
             "filter[skill_id]": category.skill_id,

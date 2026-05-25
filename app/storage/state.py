@@ -25,6 +25,10 @@ class StateStore:
         self._seen_size = seen_size
         self._lock = asyncio.Lock()
         self._seen_ids: list[str] = []
+        # IDs of projects that passed the primary check and were notified. Kept
+        # separately from Project (which add_projects overwrites on re-fetch) so
+        # the verdict survives. Powers the filtered (📂) view in the /start menu.
+        self._passed_ids: list[str] = []
         self._projects: list[Project] = []
         # Watermark per skill_id: the publish timestamp of the last announced
         # project in that category. Absence of an entry means "not yet seen".
@@ -40,6 +44,7 @@ class StateStore:
             log.exception("failed to read state from %s, starting fresh", self._path)
             return
         self._seen_ids = [str(x) for x in data.get("seen_ids", [])]
+        self._passed_ids = [str(x) for x in data.get("passed_ids", [])]
         self._projects = [Project.from_dict(p) for p in data.get("projects", [])]
         raw_watermark = data.get("last_published_ts", {})
         if isinstance(raw_watermark, dict):
@@ -52,6 +57,7 @@ class StateStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "seen_ids": self._seen_ids,
+            "passed_ids": self._passed_ids,
             "projects": [p.to_dict() for p in self._projects],
             "last_published_ts": self._watermarks,
         }
@@ -82,6 +88,24 @@ class StateStore:
             # Keep the most recently seen IDs (insertion order = recency).
             self._seen_ids = self._seen_ids[-self._seen_size:]
             await self._persist_locked()
+
+    async def mark_passed(self, project_ids: list[str]) -> None:
+        """Record projects that passed the primary check and were notified, so
+        the filtered (📂) /start view can show only them."""
+        if not project_ids:
+            return
+        async with self._lock:
+            existing = set(self._passed_ids)
+            for project_id in project_ids:
+                if project_id not in existing:
+                    self._passed_ids.append(project_id)
+                    existing.add(project_id)
+            self._passed_ids = self._passed_ids[-self._seen_size:]
+            await self._persist_locked()
+
+    async def passed_ids(self) -> set[str]:
+        async with self._lock:
+            return set(self._passed_ids)
 
     async def add_projects(self, projects: list[Project]) -> None:
         if not projects:

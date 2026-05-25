@@ -18,9 +18,16 @@ def projects_page_view(
     page: int,
     settings: Settings,
     filter_key: str = keyboards.LIST_FILTER_ALL,
+    *,
+    passed_ids: set[str] | None = None,
+    unfiltered: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup]:
-    label = _filter_label(settings, filter_key)
+    label = _filter_label(settings, filter_key, unfiltered)
     filtered = _filter_projects(projects, filter_key)
+    # Filtered (📂) view: keep only orders that passed the primary check.
+    # Unfiltered (🔴) view: show everything as-is.
+    if not unfiltered and passed_ids is not None:
+        filtered = [p for p in filtered if p.id in passed_ids]
 
     if not filtered:
         return (
@@ -34,7 +41,7 @@ def projects_page_view(
     page = max(0, min(page, total_pages - 1))
 
     text = formatting.format_projects_page_header(label, page, total_pages, total)
-    markup = keyboards.projects_page_keyboard(filtered, page, page_size, filter_key)
+    markup = keyboards.projects_page_keyboard(filtered, page, page_size, filter_key, raw=unfiltered)
     return text, markup
 
 
@@ -48,8 +55,9 @@ def _filter_projects(projects: list[Project], filter_key: str) -> list[Project]:
     return [p for p in projects if p.skill_id == skill_id]
 
 
-def _filter_label(settings: Settings, filter_key: str) -> str:
+def _filter_label(settings: Settings, filter_key: str, unfiltered: bool = False) -> str:
     if filter_key == keyboards.LIST_FILTER_ALL:
         return "Все категории"
     names = {str(category.skill_id): category.name for category in settings.categories}
-    return names.get(filter_key, f"Категория #{filter_key}")
+    name = names.get(filter_key, f"Категория #{filter_key}")
+    return f"{name} · все" if unfiltered else name

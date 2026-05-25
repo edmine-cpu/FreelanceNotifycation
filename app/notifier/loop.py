@@ -117,6 +117,8 @@ class NotifierLoop:
         # advance the watermark so they're never reconsidered. A send *failure*
         # (vs. a skip) breaks the loop so the project is retried on the next tick.
         processed: list[Project] = []
+        # Passed the primary check AND notified — feeds the filtered (📂) view.
+        notified: list[Project] = []
         for project in projects:
             if not await self._passes_primary_check(project):
                 processed.append(project)
@@ -124,9 +126,12 @@ class NotifierLoop:
             if not await self._send_project(project):
                 break
             processed.append(project)
+            notified.append(project)
             await asyncio.sleep(1)
         if processed:
             await self._store.mark_seen([p.id for p in processed])
+        if notified:
+            await self._store.mark_passed([p.id for p in notified])
         return processed
 
     async def _passes_primary_check(self, project: Project) -> bool:

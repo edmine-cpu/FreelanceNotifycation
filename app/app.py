@@ -37,14 +37,22 @@ async def run(settings: Settings) -> None:
         )
         rates_provider = RatesProvider(fallback=settings.fallback_rates)
         bid_generator = BidGenerator(groq, rates_provider=rates_provider)
-        # Primary check shares the client but is otherwise independent of bid
-        # generation (separate prompt, separate request).
-        screener = OrderScreener(groq)
+        # Primary check is fail-open and runs on every new project inside a tick,
+        # so it must not block: give it its own client with minimal retries
+        # instead of the bid generator's full backoff. The secondary pass keeps
+        # full retries — it's user-triggered and wants to succeed.
+        screen_client = GroqClient(
+            api_key=settings.groq_api_key.get_secret_value(),
+            model=settings.groq_model,
+            timeout=settings.groq_timeout_sec,
+            max_retries=1,
+        )
+        screener = OrderScreener(screen_client)
         log.info("ai enabled, model=%s", settings.groq_model)
     else:
         log.info("ai disabled (no API key or GROQ_ENABLED=false)")
 
-    dispatcher = build_dispatcher(settings, store, bid_generator)
+    dispatcher = build_dispatcher(settings, store, bid_generator, source)
     notifier = NotifierLoop(bot, store, source, settings, screener=screener)
 
     stop_event = asyncio.Event()

@@ -4,6 +4,7 @@ from aiogram.enums import ParseMode
 
 from app.config import Settings
 from app.ai import BidGenerator
+from app.source import FreelancehuntSource
 from app.storage import StateStore
 
 from .handlers import callbacks, commands
@@ -20,11 +21,13 @@ def build_dispatcher(
     settings: Settings,
     store: StateStore,
     bid_generator: BidGenerator | None,
+    source: FreelancehuntSource,
 ) -> Dispatcher:
     dp = Dispatcher()
     dp["settings"] = settings
     dp["store"] = store
     dp["bid_generator"] = bid_generator
+    dp["source"] = source
     dp.include_router(commands.router)
     dp.include_router(callbacks.router)
     return dp
