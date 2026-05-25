@@ -41,7 +41,7 @@ async def run(settings: Settings) -> None:
         log.info("gemini disabled (no API key or GEMINI_ENABLED=false)")
 
     dispatcher = build_dispatcher(settings, store, bid_generator)
-    notifier = NotifierLoop(bot, store, source, settings, bid_generator)
+    notifier = NotifierLoop(bot, store, source, settings)
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)

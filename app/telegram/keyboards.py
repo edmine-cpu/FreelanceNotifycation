@@ -84,9 +84,12 @@ def project_detail_keyboard(project: Project) -> InlineKeyboardMarkup:
     )
 
 
-def notification_keyboard() -> InlineKeyboardMarkup:
+def notification_keyboard(project_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✍️ Сгенерировать ответ", callback_data=f"{CALLBACK_GEN_PREFIX}{project_id}")],
+            [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
+        ]
     )
 
 

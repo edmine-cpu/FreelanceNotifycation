@@ -6,6 +6,7 @@ from aiogram.types import CallbackQuery
 
 from app.config import Settings
 from app.gemini import BidGenerator, BidGenerationError
+from app.llm import QuotaExceededError
 from app.storage import StateStore
 
 from .. import formatting, keyboards
@@ -13,6 +14,8 @@ from ..views import projects_page_view, start_view
 
 router = Router(name="callbacks")
 log = logging.getLogger(__name__)
+
+_QUOTA_NOTICE = "Лимит запросов к ИИ исчерпан. Попробуйте позже."
 
 
 @router.callback_query(F.data == keyboards.CALLBACK_NOOP)
@@ -88,12 +91,13 @@ async def handle_generate(
     await callback.answer("Генерирую…")
     try:
         bid_text = await bid_generator.generate(project)
+    except QuotaExceededError:
+        log.warning("gemini quota exhausted on generate for project %s", project_id)
+        await _send_notice(callback, _QUOTA_NOTICE)
+        return
     except BidGenerationError:
         log.exception("generate failed for project %s", project_id)
-        try:
-            await callback.message.answer("Не удалось сгенерировать ответ")
-        except TelegramAPIError:
-            log.exception("failed to send generate error notice")
+        await _send_notice(callback, "Не удалось сгенерировать ответ")
         return
 
     try:
@@ -122,11 +126,16 @@ async def handle_regen(
         await callback.answer("Проект не найден в истории", show_alert=True)
         return
 
+    await callback.answer("Перегенерирую…")
     try:
         bid_text = await bid_generator.generate(project)
+    except QuotaExceededError:
+        log.warning("gemini quota exhausted on regen for project %s", project_id)
+        await _send_notice(callback, _QUOTA_NOTICE)
+        return
     except BidGenerationError:
         log.exception("regen failed for project %s", project_id)
-        await callback.answer("Не удалось перегенерировать", show_alert=True)
+        await _send_notice(callback, "Не удалось перегенерировать ответ")
         return
 
     try:
@@ -138,7 +147,14 @@ async def handle_regen(
     except TelegramBadRequest as exc:
         if "message is not modified" not in str(exc):
             log.exception("editMessageText failed for regen")
-    await callback.answer("Перегенерировано")
+
+
+async def _send_notice(callback: CallbackQuery, text: str) -> None:
+    """Send a plain follow-up message; the callback query is already answered."""
+    try:
+        await callback.message.answer(text)
+    except TelegramAPIError:
+        log.exception("failed to send notice: %s", text)
 
 
 async def _safe_edit(callback: CallbackQuery, text: str, markup) -> None:

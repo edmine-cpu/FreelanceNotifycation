@@ -3,12 +3,9 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from google.genai import types
-
+from app.llm import ChatMessage, LLMClient, LLMError
 from app.projects import Project
 from app.rates import RatesProvider
-
-from .client import GeminiClient
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +31,7 @@ class BidGenerator:
 
     def __init__(
         self,
-        client: GeminiClient,
+        client: LLMClient,
         examples_path: Path = EXAMPLES_FILE,
         system_prompt_path: Path = SYSTEM_PROMPT_FILE,
         rates_provider: RatesProvider | None = None,
@@ -47,23 +44,27 @@ class BidGenerator:
     async def generate(self, project: Project, language: Language | None = None) -> str:
         lang: Language = language or detect_language(f"{project.title}\n{project.description}")
         rates = await self._rates_provider.get_rates() if self._rates_provider else _DEFAULT_RATES
-        contents = self._build_contents(project, lang, rates)
+        messages = self._build_messages(project, lang, rates)
         try:
             return await self._client.generate(
                 system_instruction=self._system_prompt,
-                contents=contents,
+                messages=messages,
             )
+        except LLMError:
+            # Quota / rate-limit and other typed LLM failures keep their type so
+            # callers can react specifically (e.g. show a "limit reached" notice).
+            raise
         except Exception as exc:
             raise BidGenerationError(str(exc)) from exc
 
-    def _build_contents(
+    def _build_messages(
         self, project: Project, lang: Language, rates: dict[str, float]
-    ) -> list[types.Content]:
-        contents: list[types.Content] = []
+    ) -> list[ChatMessage]:
+        messages: list[ChatMessage] = []
         for example in self._examples.get("examples", []):
             user_payload = json.dumps(example["input"], ensure_ascii=False)
-            contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_payload)]))
-            contents.append(types.Content(role="model", parts=[types.Part.from_text(text=example["output"])]))
+            messages.append(ChatMessage(role="user", text=user_payload))
+            messages.append(ChatMessage(role="model", text=example["output"]))
 
         rates_line = (
             f"1$ = {rates['UAH']:.2f} грн (UAH), {rates['EUR']:.2f} евро (EUR), "
@@ -88,13 +89,10 @@ class BidGenerator:
                 f"Курси для переведення з доларів: {rates_line}."
             ),
         }
-        contents.append(
-            types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=json.dumps(target_payload, ensure_ascii=False))],
-            )
+        messages.append(
+            ChatMessage(role="user", text=json.dumps(target_payload, ensure_ascii=False))
         )
-        return contents
+        return messages
 
 
 def detect_language(text: str) -> Language:
