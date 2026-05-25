@@ -5,6 +5,7 @@ import signal
 from app.config import Settings
 from app.gemini import BidGenerator, GeminiClient
 from app.notifier import NotifierLoop
+from app.rates import RatesProvider
 from app.source import FreelancehuntSource
 from app.storage import StateStore
 from app.telegram import build_bot, build_dispatcher
@@ -13,11 +14,17 @@ log = logging.getLogger(__name__)
 
 
 async def run(settings: Settings) -> None:
+    categories = settings.categories
+    log.info(
+        "watching %d categories: %s",
+        len(categories),
+        ", ".join(f"{c.name} (skill {c.skill_id})" for c in categories),
+    )
     bot = build_bot(settings.telegram_bot_token.get_secret_value())
     store = StateStore(settings.state_file, history_size=settings.history_size)
     source = FreelancehuntSource(
         token=settings.freelancehunt_token.get_secret_value(),
-        categories=settings.categories,
+        categories=categories,
     )
 
     bid_generator: BidGenerator | None = None
@@ -27,7 +34,8 @@ async def run(settings: Settings) -> None:
             model=settings.gemini_model,
             timeout=settings.gemini_timeout_sec,
         )
-        bid_generator = BidGenerator(gemini)
+        rates_provider = RatesProvider(fallback=settings.fallback_rates)
+        bid_generator = BidGenerator(gemini, rates_provider=rates_provider)
         log.info("gemini enabled, model=%s", settings.gemini_model)
     else:
         log.info("gemini disabled (no API key or GEMINI_ENABLED=false)")

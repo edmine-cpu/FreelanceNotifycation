@@ -6,6 +6,7 @@ from typing import Literal
 from google.genai import types
 
 from app.projects import Project
+from app.rates import RatesProvider
 
 from .client import GeminiClient
 
@@ -16,6 +17,9 @@ Language = Literal["ru", "ua"]
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 EXAMPLES_FILE = PROMPTS_DIR / "bids_examples.json"
 SYSTEM_PROMPT_FILE = PROMPTS_DIR / "system_prompt.md"
+
+# Used only when no RatesProvider is supplied (e.g. in isolated tests).
+_DEFAULT_RATES: dict[str, float] = {"UAH": 43.0, "EUR": 0.92, "PLN": 4.0}
 
 # Чисто украинские буквы — їх відсутність у тексті означає, що це російська/інша мова.
 _UA_ONLY_LETTERS = set("іїєґІЇЄҐ")
@@ -33,14 +37,17 @@ class BidGenerator:
         client: GeminiClient,
         examples_path: Path = EXAMPLES_FILE,
         system_prompt_path: Path = SYSTEM_PROMPT_FILE,
+        rates_provider: RatesProvider | None = None,
     ) -> None:
         self._client = client
         self._system_prompt = system_prompt_path.read_text(encoding="utf-8").strip()
         self._examples = json.loads(examples_path.read_text(encoding="utf-8"))
+        self._rates_provider = rates_provider
 
     async def generate(self, project: Project, language: Language | None = None) -> str:
         lang: Language = language or detect_language(f"{project.title}\n{project.description}")
-        contents = self._build_contents(project, lang)
+        rates = await self._rates_provider.get_rates() if self._rates_provider else _DEFAULT_RATES
+        contents = self._build_contents(project, lang, rates)
         try:
             return await self._client.generate(
                 system_instruction=self._system_prompt,
@@ -49,24 +56,36 @@ class BidGenerator:
         except Exception as exc:
             raise BidGenerationError(str(exc)) from exc
 
-    def _build_contents(self, project: Project, lang: Language) -> list[types.Content]:
+    def _build_contents(
+        self, project: Project, lang: Language, rates: dict[str, float]
+    ) -> list[types.Content]:
         contents: list[types.Content] = []
         for example in self._examples.get("examples", []):
             user_payload = json.dumps(example["input"], ensure_ascii=False)
             contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_payload)]))
             contents.append(types.Content(role="model", parts=[types.Part.from_text(text=example["output"])]))
 
+        rates_line = (
+            f"1$ = {rates['UAH']:.2f} грн (UAH), {rates['EUR']:.2f} евро (EUR), "
+            f"{rates['PLN']:.2f} злотых (PLN)"
+        )
         target_payload = {
             "project_title": project.title,
             "project_description": project.description,
             "budget": project.budget or None,
             "language": lang,
             "instructions": (
-                "Сгенерируй ставку. В строке цены/сроков оставь литералы {price} и {deadline} вместо чисел — "
-                "пользователь подставит их вручную перед отправкой."
+                "Сгенерируй ставку. Строку цены/сроков выбери по конкретике ТЗ (см. правила): "
+                "конкретное ТЗ — реальные числа (часы × 5$, валюта по бюджету заказа); "
+                "понятен только тип проекта — оставь литералы {price} и {deadline}; "
+                "нет конкретики — убери строку цены/сроков целиком. "
+                f"Курсы для перевода из долларов: {rates_line}."
                 if lang == "ru"
-                else "Згенеруй ставку. У рядку ціни/термінів залиш літерали {price} і {deadline} замість чисел — "
-                "користувач підставить їх вручну перед відправленням."
+                else "Згенеруй ставку. Рядок ціни/термінів обери за конкретикою ТЗ (див. правила): "
+                "конкретне ТЗ — реальні числа (години × 5$, валюта за бюджетом замовлення); "
+                "зрозумілий лише тип проєкту — залиш літерали {price} і {deadline}; "
+                "немає конкретики — прибери рядок ціни/термінів цілком. "
+                f"Курси для переведення з доларів: {rates_line}."
             ),
         }
         contents.append(

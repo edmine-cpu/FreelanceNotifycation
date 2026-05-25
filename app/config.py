@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     send_existing_on_first_run: bool = False
     page_size: int = 5
     history_size: int = 50
+    # Фолбэк-курсы конвертации цены (1$ = N валюты): используются, только когда
+    # API курсов недоступен. Живые курсы тянутся из open.er-api.com. Правятся в .env.
+    usd_uah_rate: float = 43.0
+    usd_eur_rate: float = 0.92
+    usd_pln_rate: float = 4.0
 
     gemini_api_key: SecretStr = Field(default=SecretStr(""))
     gemini_model: str = "gemini-2.5-flash"
@@ -89,3 +94,8 @@ class Settings(BaseSettings):
     @property
     def gemini_active(self) -> bool:
         return self.gemini_enabled and bool(self.gemini_api_key.get_secret_value())
+
+    @property
+    def fallback_rates(self) -> dict[str, float]:
+        """USD-based rates used when the live rates API is unavailable."""
+        return {"UAH": self.usd_uah_rate, "EUR": self.usd_eur_rate, "PLN": self.usd_pln_rate}
