@@ -4,6 +4,7 @@ import logging
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
+from app.ai import OrderScreener
 from app.config import Settings
 from app.projects import Project
 from app.source import FreelancehuntSource
@@ -39,11 +40,13 @@ class NotifierLoop:
         store: StateStore,
         source: FreelancehuntSource,
         settings: Settings,
+        screener: OrderScreener | None = None,
     ) -> None:
         self._bot = bot
         self._store = store
         self._source = source
         self._settings = settings
+        self._screener = screener
 
     async def run(self, stop_event: asyncio.Event) -> None:
         log.info("starting notifier loop, interval=%ss", self._settings.poll_interval)
@@ -85,8 +88,8 @@ class NotifierLoop:
 
         new_projects.sort(key=lambda p: p.published_ts)
         log.info("found %d new projects (fetched=%d)", len(new_projects), len(projects))
-        sent = await self._send_batch(new_projects)
-        await self._advance_watermarks(sent)
+        processed = await self._send_batch(new_projects)
+        await self._advance_watermarks(processed)
 
     async def _init_category(self, skill_id: int, group: list[Project]) -> None:
         """Handle the first tick that ever sees a category: suppress (or, if
@@ -109,15 +112,37 @@ class NotifierLoop:
             )
 
     async def _send_batch(self, projects: list[Project]) -> list[Project]:
-        sent: list[Project] = []
+        # "processed" = projects we're done with this tick, either notified or
+        # deliberately skipped by the primary check. Both get marked seen and
+        # advance the watermark so they're never reconsidered. A send *failure*
+        # (vs. a skip) breaks the loop so the project is retried on the next tick.
+        processed: list[Project] = []
         for project in projects:
+            if not await self._passes_primary_check(project):
+                processed.append(project)
+                continue
             if not await self._send_project(project):
                 break
-            sent.append(project)
+            processed.append(project)
             await asyncio.sleep(1)
-        if sent:
-            await self._store.mark_seen([p.id for p in sent])
-        return sent
+        if processed:
+            await self._store.mark_seen([p.id for p in processed])
+        return processed
+
+    async def _passes_primary_check(self, project: Project) -> bool:
+        """Primary check, run before any notification or bid generation: ask the
+        AI whether the order's stack is one we work with. Independent of the
+        secondary pass (bid generation). No screener configured (AI off) means
+        everything passes, preserving the original behaviour."""
+        if self._screener is None:
+            return True
+        result = await self._screener.screen(project)
+        if not result.allowed:
+            log.info(
+                "primary check skipped project %s (stack=%s): %s",
+                project.id, result.stack or "?", project.title,
+            )
+        return result.allowed
 
     async def _send_project(self, project: Project) -> bool:
         text = formatting.format_project_notification(project)

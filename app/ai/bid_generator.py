@@ -70,6 +70,7 @@ class BidGenerator:
             f"1$ = {rates['UAH']:.2f} грн (UAH), {rates['EUR']:.2f} евро (EUR), "
             f"{rates['PLN']:.2f} злотых (PLN)"
         )
+        budget_note_ru, budget_note_ua = _budget_floor_notes(project.budget)
         target_payload = {
             "project_title": project.title,
             "project_description": project.description,
@@ -80,19 +81,54 @@ class BidGenerator:
                 "конкретное ТЗ — реальные числа (часы × 10$, валюта по бюджету заказа); "
                 "понятен только тип проекта — оставь литералы {price} и {deadline}; "
                 "нет конкретики — убери строку цены/сроков целиком. "
-                f"Курсы для перевода из долларов: {rates_line}."
+                f"Курсы для перевода из долларов: {rates_line}.{budget_note_ru}"
                 if lang == "ru"
                 else "Згенеруй ставку. Рядок ціни/термінів обери за конкретикою ТЗ (див. правила): "
                 "конкретне ТЗ — реальні числа (години × 10$, валюта за бюджетом замовлення); "
                 "зрозумілий лише тип проєкту — залиш літерали {price} і {deadline}; "
                 "немає конкретики — прибери рядок ціни/термінів цілком. "
-                f"Курси для переведення з доларів: {rates_line}."
+                f"Курси для переведення з доларів: {rates_line}.{budget_note_ua}"
             ),
         }
         messages.append(
             ChatMessage(role="user", text=json.dumps(target_payload, ensure_ascii=False))
         )
         return messages
+
+
+def parse_budget(raw: str) -> tuple[float | None, str]:
+    """Parse a FreelanceHunt budget string like ``"5000 UAH"`` into
+    ``(amount, currency)``. Returns ``(None, "")`` when there's no usable amount."""
+    if not raw:
+        return None, ""
+    parts = raw.split()
+    try:
+        amount = float(parts[0].replace(",", "."))
+    except (ValueError, IndexError):
+        return None, ""
+    currency = parts[1] if len(parts) > 1 else ""
+    return amount, currency
+
+
+def _budget_floor_notes(raw_budget: str) -> tuple[str, str]:
+    """Build the (ru, ua) instruction fragments that enforce the budget floor:
+    a concrete-ТЗ estimate must never go below the order's own budget. Returns
+    empty strings when the order has no parseable budget (nothing to floor to)."""
+    amount, currency = parse_budget(raw_budget)
+    if amount is None:
+        return "", ""
+    pretty = f"{amount:.0f} {currency}".strip()
+    ru = (
+        f" Минимальная цена ставки — бюджет заказа ({pretty}): если расчёт "
+        "(часы × 10$) в пересчёте на валюту заказа выходит меньше этой суммы — "
+        "ставь сумму бюджета заказа, ниже бюджета клиента не опускайся."
+    )
+    ua = (
+        f" Мінімальна ціна ставки — бюджет замовлення ({pretty}): якщо розрахунок "
+        "(години × 10$) у перерахунку на валюту замовлення виходить менший за цю суму — "
+        "став суму бюджету замовлення, нижче за бюджет клієнта не опускайся."
+    )
+    return ru, ua
 
 
 def detect_language(text: str) -> Language:

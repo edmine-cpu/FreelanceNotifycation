@@ -3,7 +3,7 @@ import logging
 import signal
 
 from app.config import Settings
-from app.ai import BidGenerator, GroqClient
+from app.ai import BidGenerator, GroqClient, OrderScreener
 from app.notifier import NotifierLoop
 from app.rates import RatesProvider
 from app.source import FreelancehuntSource
@@ -28,6 +28,7 @@ async def run(settings: Settings) -> None:
     )
 
     bid_generator: BidGenerator | None = None
+    screener: OrderScreener | None = None
     if settings.ai_active:
         groq = GroqClient(
             api_key=settings.groq_api_key.get_secret_value(),
@@ -36,12 +37,15 @@ async def run(settings: Settings) -> None:
         )
         rates_provider = RatesProvider(fallback=settings.fallback_rates)
         bid_generator = BidGenerator(groq, rates_provider=rates_provider)
+        # Primary check shares the client but is otherwise independent of bid
+        # generation (separate prompt, separate request).
+        screener = OrderScreener(groq)
         log.info("ai enabled, model=%s", settings.groq_model)
     else:
         log.info("ai disabled (no API key or GROQ_ENABLED=false)")
 
     dispatcher = build_dispatcher(settings, store, bid_generator)
-    notifier = NotifierLoop(bot, store, source, settings)
+    notifier = NotifierLoop(bot, store, source, settings, screener=screener)
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
