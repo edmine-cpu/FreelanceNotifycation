@@ -44,7 +44,9 @@ async def handle_start_menu(callback: CallbackQuery, settings: Settings) -> None
 async def handle_list_page(callback: CallbackQuery, settings: Settings, store: StateStore) -> None:
     filter_key, page = _parse_list_data(callback.data or "")
     projects = await store.recent_projects()
-    passed = await store.passed_ids()
+    # With AI off there's no primary check, so nothing is ever marked passed —
+    # fall back to showing everything (passed_ids=None disables the filter).
+    passed = await store.passed_ids() if settings.ai_active else None
     text, markup = projects_page_view(projects, page, settings, filter_key, passed_ids=passed)
     await _safe_edit(callback, text, markup)
     await callback.answer()

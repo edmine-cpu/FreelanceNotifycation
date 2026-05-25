@@ -103,6 +103,19 @@ class StateStore:
             self._passed_ids = self._passed_ids[-self._seen_size:]
             await self._persist_locked()
 
+    async def set_passed(self, project_ids: list[str]) -> None:
+        """Replace the whole passed set (used by the startup re-filter, which
+        recomputes it from scratch each launch)."""
+        async with self._lock:
+            seen: set[str] = set()
+            ordered: list[str] = []
+            for project_id in project_ids:
+                if project_id not in seen:
+                    seen.add(project_id)
+                    ordered.append(project_id)
+            self._passed_ids = ordered[-self._seen_size:]
+            await self._persist_locked()
+
     async def passed_ids(self) -> set[str]:
         async with self._lock:
             return set(self._passed_ids)

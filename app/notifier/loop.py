@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -50,6 +51,7 @@ class NotifierLoop:
 
     async def run(self, stop_event: asyncio.Event) -> None:
         log.info("starting notifier loop, interval=%ss", self._settings.poll_interval)
+        await self.rebuild_filter()
         while not stop_event.is_set():
             try:
                 await self._tick()
@@ -60,6 +62,32 @@ class NotifierLoop:
             except asyncio.TimeoutError:
                 pass
         log.info("notifier loop stopped")
+
+    async def rebuild_filter(self) -> None:
+        """Re-run the primary check over all currently open projects and rebuild
+        the filtered (📂) set from scratch. Runs once on each bot launch, before
+        the polling loop. Sends no notifications — it only repopulates passed_ids.
+        No-op when AI is off (then 📂 simply shows everything via an empty set)."""
+        if self._screener is None:
+            return
+        try:
+            projects = await self._source.fetch_projects()
+        except Exception:
+            log.exception("filter rebuild: fetch failed, keeping previous filtered set")
+            return
+        if projects:
+            await self._store.add_projects(projects)
+        log.info("filter rebuild: screening %d projects (once at startup)…", len(projects))
+        started = time.monotonic()
+        passed: list[str] = []
+        for project in projects:
+            if (await self._screener.screen(project)).allowed:
+                passed.append(project.id)
+        await self._store.set_passed(passed)
+        log.info(
+            "filter rebuild done in %.1fs: %d/%d projects passed the primary check",
+            time.monotonic() - started, len(passed), len(projects),
+        )
 
     async def _tick(self) -> None:
         projects = await self._source.fetch_projects()
