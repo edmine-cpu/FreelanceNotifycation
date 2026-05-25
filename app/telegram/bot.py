@@ -3,7 +3,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from app.config import Settings
-from app.gemini import BidGenerator
+from app.ai import BidGenerator
 from app.storage import StateStore
 
 from .handlers import callbacks, commands

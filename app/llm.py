@@ -1,7 +1,7 @@
 """Provider-agnostic LLM interface.
 
 All model-specific code lives in a single client implementation (currently
-``app.gemini.GeminiClient``). To switch providers or models, write a new class
+``app.ai.GroqClient``). To switch providers or models, write a new class
 that satisfies ``LLMClient`` and swap the one instantiation in ``app.app.run`` —
 prompt-building code (e.g. ``BidGenerator``) depends only on the types here, not
 on any SDK.

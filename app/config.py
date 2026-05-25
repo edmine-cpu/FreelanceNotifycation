@@ -71,10 +71,10 @@ class Settings(BaseSettings):
     usd_eur_rate: float = 0.92
     usd_pln_rate: float = 4.0
 
-    gemini_api_key: SecretStr = Field(default=SecretStr(""))
-    gemini_model: str = "gemini-2.5-flash"
-    gemini_enabled: bool = True
-    gemini_timeout_sec: float = 20.0
+    groq_api_key: SecretStr = Field(default=SecretStr(""))
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_enabled: bool = True
+    groq_timeout_sec: float = 20.0
 
     @field_validator("skill_ids")
     @classmethod
@@ -92,8 +92,8 @@ class Settings(BaseSettings):
         return ", ".join(category.name for category in self.categories)
 
     @property
-    def gemini_active(self) -> bool:
-        return self.gemini_enabled and bool(self.gemini_api_key.get_secret_value())
+    def ai_active(self) -> bool:
+        return self.groq_enabled and bool(self.groq_api_key.get_secret_value())
 
     @property
     def fallback_rates(self) -> dict[str, float]:

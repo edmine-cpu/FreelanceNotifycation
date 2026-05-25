@@ -3,7 +3,7 @@ import logging
 import signal
 
 from app.config import Settings
-from app.gemini import BidGenerator, GeminiClient
+from app.ai import BidGenerator, GroqClient
 from app.notifier import NotifierLoop
 from app.rates import RatesProvider
 from app.source import FreelancehuntSource
@@ -28,17 +28,17 @@ async def run(settings: Settings) -> None:
     )
 
     bid_generator: BidGenerator | None = None
-    if settings.gemini_active:
-        gemini = GeminiClient(
-            api_key=settings.gemini_api_key.get_secret_value(),
-            model=settings.gemini_model,
-            timeout=settings.gemini_timeout_sec,
+    if settings.ai_active:
+        groq = GroqClient(
+            api_key=settings.groq_api_key.get_secret_value(),
+            model=settings.groq_model,
+            timeout=settings.groq_timeout_sec,
         )
         rates_provider = RatesProvider(fallback=settings.fallback_rates)
-        bid_generator = BidGenerator(gemini, rates_provider=rates_provider)
-        log.info("gemini enabled, model=%s", settings.gemini_model)
+        bid_generator = BidGenerator(groq, rates_provider=rates_provider)
+        log.info("ai enabled, model=%s", settings.groq_model)
     else:
-        log.info("gemini disabled (no API key or GEMINI_ENABLED=false)")
+        log.info("ai disabled (no API key or GROQ_ENABLED=false)")
 
     dispatcher = build_dispatcher(settings, store, bid_generator)
     notifier = NotifierLoop(bot, store, source, settings)

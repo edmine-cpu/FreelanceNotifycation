@@ -5,7 +5,7 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from app.config import Settings
-from app.gemini import BidGenerator, BidGenerationError
+from app.ai import BidGenerator, BidGenerationError
 from app.llm import QuotaExceededError
 from app.storage import StateStore
 
@@ -79,7 +79,7 @@ async def handle_generate(
     bid_generator: BidGenerator | None,
 ) -> None:
     if bid_generator is None:
-        await callback.answer("Gemini выключен в настройках", show_alert=True)
+        await callback.answer("ИИ выключен в настройках", show_alert=True)
         return
 
     project_id = (callback.data or "")[len(keyboards.CALLBACK_GEN_PREFIX):]
@@ -92,7 +92,7 @@ async def handle_generate(
     try:
         bid_text = await bid_generator.generate(project)
     except QuotaExceededError:
-        log.warning("gemini quota exhausted on generate for project %s", project_id)
+        log.warning("ai quota exhausted on generate for project %s", project_id)
         await _send_notice(callback, _QUOTA_NOTICE)
         return
     except BidGenerationError:
@@ -117,7 +117,7 @@ async def handle_regen(
     bid_generator: BidGenerator | None,
 ) -> None:
     if bid_generator is None:
-        await callback.answer("Gemini выключен в настройках", show_alert=True)
+        await callback.answer("ИИ выключен в настройках", show_alert=True)
         return
 
     project_id = (callback.data or "")[len(keyboards.CALLBACK_REGEN_PREFIX):]
@@ -130,7 +130,7 @@ async def handle_regen(
     try:
         bid_text = await bid_generator.generate(project)
     except QuotaExceededError:
-        log.warning("gemini quota exhausted on regen for project %s", project_id)
+        log.warning("ai quota exhausted on regen for project %s", project_id)
         await _send_notice(callback, _QUOTA_NOTICE)
         return
     except BidGenerationError:
