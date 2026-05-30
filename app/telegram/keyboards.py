@@ -92,7 +92,6 @@ def prompt_json_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✏️ Изменить JSON", callback_data=CALLBACK_PROMPT_EDIT)],
-            [InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)],
             [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
         ]
     )

@@ -94,17 +94,26 @@ async def handle_prompt_json(
     try:
         text = read_prompt_json(prompt_examples_path)
     except PromptJsonError as exc:
-        await _safe_edit(
+        await _send_settings_flow_message(
             callback,
             formatting.format_settings_notice(str(exc)),
-            keyboards.settings_keyboard(),
+            keyboards.hide_keyboard(),
         )
         await callback.answer()
         return
     if len(text) > _TELEGRAM_TEXT_LIMIT:
         await callback.answer("JSON больше лимита одного сообщения Telegram", show_alert=True)
         return
-    await _safe_edit(callback, text, keyboards.prompt_json_keyboard(), parse_mode=None)
+    try:
+        await callback.message.answer(
+            text,
+            reply_markup=keyboards.prompt_json_keyboard(),
+            parse_mode=None,
+        )
+    except TelegramAPIError:
+        log.exception("failed to send prompt JSON")
+        await callback.answer("Не удалось отправить JSON", show_alert=True)
+        return
     await callback.answer()
 
 
@@ -118,7 +127,7 @@ async def handle_prompt_edit_menu(
         return
     await state.set_state(SettingsFlow.awaiting_prompt_json)
     await _remember_menu_message(callback, state)
-    await _safe_edit(callback, formatting.format_prompt_edit_prompt(), keyboards.settings_back_keyboard())
+    await _safe_edit(callback, formatting.format_prompt_edit_prompt(), keyboards.hide_keyboard())
     await callback.answer()
 
 
@@ -220,7 +229,7 @@ async def handle_prompt_json_message(
             message,
             state,
             formatting.format_settings_notice("Отправь JSON обычным текстовым сообщением."),
-            keyboards.settings_back_keyboard(),
+            keyboards.hide_keyboard(),
         )
         await _delete_user_message(message)
         return
@@ -232,7 +241,7 @@ async def handle_prompt_json_message(
             message,
             state,
             formatting.format_settings_notice(f"{exc}\n\nОтправь исправленный JSON ещё раз."),
-            keyboards.settings_back_keyboard(),
+            keyboards.hide_keyboard(),
         )
         await _delete_user_message(message)
         return
@@ -244,7 +253,7 @@ async def handle_prompt_json_message(
         message,
         state,
         formatting.format_settings_notice("JSON промта обновлён."),
-        keyboards.settings_keyboard(),
+        keyboards.hide_keyboard(),
     )
     await state.clear()
 
@@ -391,6 +400,21 @@ async def _send_notice(callback: CallbackQuery, text: str) -> None:
         await callback.message.answer(text)
     except TelegramAPIError:
         log.exception("failed to send notice: %s", text)
+
+
+async def _send_settings_flow_message(
+    callback: CallbackQuery,
+    text: str,
+    markup: InlineKeyboardMarkup,
+    *,
+    parse_mode: str | None = "HTML",
+) -> bool:
+    try:
+        await callback.message.answer(text, reply_markup=markup, parse_mode=parse_mode)
+    except TelegramAPIError:
+        log.exception("failed to send settings flow message")
+        return False
+    return True
 
 
 async def _ensure_callback_allowed(callback: CallbackQuery, settings: Settings) -> bool:
