@@ -96,9 +96,13 @@ class NotifierLoop:
 
         await self._store.add_projects(projects)
         by_category = _group_by_skill(projects)
+        muted_skill_ids = await self._store.muted_skill_ids()
 
         new_projects: list[Project] = []
         for skill_id, group in by_category.items():
+            if skill_id in muted_skill_ids:
+                await self._skip_muted_category(skill_id, group)
+                continue
             if not self._store.has_watermark(skill_id):
                 await self._init_category(skill_id, group)
                 continue
@@ -128,6 +132,16 @@ class NotifierLoop:
             await self._send_batch(sorted(group, key=lambda p: p.published_ts))
         else:
             log.info("first sight of skill %d: suppressing %d existing projects", skill_id, len(group))
+        await self._store.mark_seen([p.id for p in group])
+        await self._store.update_last_published_ts(
+            skill_id, max(p.published_ts for p in group)
+        )
+
+    async def _skip_muted_category(self, skill_id: int, group: list[Project]) -> None:
+        """Keep muted categories up to date without sending notifications."""
+        if not group:
+            return
+        log.info("skill %d is muted: suppressing %d fetched projects", skill_id, len(group))
         await self._store.mark_seen([p.id for p in group])
         await self._store.update_last_published_ts(
             skill_id, max(p.published_ts for p in group)

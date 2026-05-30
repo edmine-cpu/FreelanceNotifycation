@@ -13,6 +13,23 @@ def start_view(settings: Settings) -> tuple[str, InlineKeyboardMarkup]:
     )
 
 
+def settings_view(settings: Settings, muted_skill_ids: set[int]) -> tuple[str, InlineKeyboardMarkup]:
+    return (
+        formatting.format_settings_menu(settings.category_label, len(muted_skill_ids)),
+        keyboards.settings_keyboard(),
+    )
+
+
+def category_notifications_view(
+    settings: Settings,
+    muted_skill_ids: set[int],
+) -> tuple[str, InlineKeyboardMarkup]:
+    return (
+        formatting.format_category_notifications(settings.category_label),
+        keyboards.category_notifications_keyboard(settings.categories, muted_skill_ids),
+    )
+
+
 def projects_page_view(
     projects: list[Project],
     page: int,

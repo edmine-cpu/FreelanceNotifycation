@@ -1,22 +1,32 @@
 import logging
+from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.types import CallbackQuery
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
-from app.config import Settings
+from app.config import Settings, parse_skill_ids
 from app.ai import BidGenerator, BidGenerationError
+from app.ai.prompt_store import PromptJsonError, read_prompt_json, write_prompt_json
 from app.llm import QuotaExceededError
 from app.source import FreelancehuntSource
 from app.storage import StateStore
 
 from .. import formatting, keyboards
-from ..views import projects_page_view, start_view
+from ..views import category_notifications_view, projects_page_view, settings_view, start_view
 
 router = Router(name="callbacks")
 log = logging.getLogger(__name__)
 
 _QUOTA_NOTICE = "Лимит запросов к ИИ исчерпан. Попробуйте позже."
+_TELEGRAM_TEXT_LIMIT = 4096
+
+
+class SettingsFlow(StatesGroup):
+    awaiting_category_id = State()
+    awaiting_prompt_json = State()
 
 
 @router.callback_query(F.data == keyboards.CALLBACK_NOOP)
@@ -25,7 +35,8 @@ async def handle_noop(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == keyboards.CALLBACK_HIDE)
-async def handle_hide(callback: CallbackQuery) -> None:
+async def handle_hide(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     try:
         await callback.message.delete()
     except TelegramBadRequest:
@@ -34,10 +45,208 @@ async def handle_hide(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data == keyboards.CALLBACK_START)
-async def handle_start_menu(callback: CallbackQuery, settings: Settings) -> None:
+async def handle_start_menu(callback: CallbackQuery, settings: Settings, state: FSMContext) -> None:
+    await state.clear()
     text, markup = start_view(settings)
     await _safe_edit(callback, text, markup)
     await callback.answer()
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_SETTINGS)
+async def handle_settings_menu(
+    callback: CallbackQuery,
+    settings: Settings,
+    store: StateStore,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.clear()
+    text, markup = settings_view(settings, await store.muted_skill_ids())
+    await _safe_edit(callback, text, markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_ADD_CATEGORY)
+async def handle_add_category_menu(
+    callback: CallbackQuery,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.set_state(SettingsFlow.awaiting_category_id)
+    await _remember_menu_message(callback, state)
+    await _safe_edit(callback, formatting.format_add_category_prompt(), keyboards.settings_back_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_PROMPT_JSON)
+async def handle_prompt_json(
+    callback: CallbackQuery,
+    settings: Settings,
+    prompt_examples_path: Path,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.clear()
+    try:
+        text = read_prompt_json(prompt_examples_path)
+    except PromptJsonError as exc:
+        await _safe_edit(
+            callback,
+            formatting.format_settings_notice(str(exc)),
+            keyboards.settings_keyboard(),
+        )
+        await callback.answer()
+        return
+    if len(text) > _TELEGRAM_TEXT_LIMIT:
+        await callback.answer("JSON больше лимита одного сообщения Telegram", show_alert=True)
+        return
+    await _safe_edit(callback, text, keyboards.prompt_json_keyboard(), parse_mode=None)
+    await callback.answer()
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_PROMPT_EDIT)
+async def handle_prompt_edit_menu(
+    callback: CallbackQuery,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.set_state(SettingsFlow.awaiting_prompt_json)
+    await _remember_menu_message(callback, state)
+    await _safe_edit(callback, formatting.format_prompt_edit_prompt(), keyboards.settings_back_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_NOTIFICATIONS)
+async def handle_notifications_menu(
+    callback: CallbackQuery,
+    settings: Settings,
+    store: StateStore,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.clear()
+    text, markup = category_notifications_view(settings, await store.muted_skill_ids())
+    await _safe_edit(callback, text, markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(keyboards.CALLBACK_TOGGLE_MUTE_PREFIX))
+async def handle_toggle_category_notifications(
+    callback: CallbackQuery,
+    settings: Settings,
+    store: StateStore,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    skill_id = _parse_skill_id_suffix(callback.data or "", keyboards.CALLBACK_TOGGLE_MUTE_PREFIX)
+    if skill_id <= 0:
+        await callback.answer("Некорректная категория", show_alert=True)
+        return
+    muted = await store.toggle_muted_skill_id(skill_id)
+    text, markup = category_notifications_view(settings, await store.muted_skill_ids())
+    await _safe_edit(callback, text, markup)
+    await callback.answer("Уведомления выключены" if muted else "Уведомления включены")
+
+
+@router.message(SettingsFlow.awaiting_category_id)
+async def handle_category_id_message(
+    message: Message,
+    settings: Settings,
+    store: StateStore,
+    source: FreelancehuntSource,
+    state: FSMContext,
+) -> None:
+    if not _is_allowed_chat(message.chat.id, settings):
+        await _delete_user_message(message)
+        return
+    raw = (message.text or "").strip()
+    try:
+        skill_id = int(raw)
+    except ValueError:
+        await _edit_menu_from_state(
+            message,
+            state,
+            formatting.format_settings_notice("ID категории должен быть числом. Отправь ID ещё раз."),
+            keyboards.settings_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+    if skill_id <= 0:
+        await _edit_menu_from_state(
+            message,
+            state,
+            formatting.format_settings_notice("ID категории должен быть положительным числом."),
+            keyboards.settings_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+
+    fallback = parse_skill_ids(settings.skill_ids)
+    added = await store.add_skill_id(skill_id, fallback)
+    skill_ids = await store.skill_ids(fallback)
+    settings.skill_ids = ",".join(str(item) for item in skill_ids)
+    source.set_categories(settings.categories)
+    await _delete_user_message(message)
+
+    if added:
+        text = formatting.format_settings_notice(f"Категория #{skill_id} добавлена.")
+    else:
+        text = formatting.format_settings_notice(f"Категория #{skill_id} уже есть в списке.")
+    await _edit_menu_from_state(message, state, text, keyboards.settings_keyboard())
+    await state.clear()
+
+
+@router.message(SettingsFlow.awaiting_prompt_json)
+async def handle_prompt_json_message(
+    message: Message,
+    settings: Settings,
+    bid_generator: BidGenerator | None,
+    prompt_examples_path: Path,
+    state: FSMContext,
+) -> None:
+    if not _is_allowed_chat(message.chat.id, settings):
+        await _delete_user_message(message)
+        return
+    raw = message.text or ""
+    if not raw.strip():
+        await _edit_menu_from_state(
+            message,
+            state,
+            formatting.format_settings_notice("Отправь JSON обычным текстовым сообщением."),
+            keyboards.settings_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+
+    try:
+        write_prompt_json(raw, prompt_examples_path)
+    except PromptJsonError as exc:
+        await _edit_menu_from_state(
+            message,
+            state,
+            formatting.format_settings_notice(f"{exc}\n\nОтправь исправленный JSON ещё раз."),
+            keyboards.settings_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+
+    if bid_generator is not None:
+        bid_generator.reload_prompt()
+    await _delete_user_message(message)
+    await _edit_menu_from_state(
+        message,
+        state,
+        formatting.format_settings_notice("JSON промта обновлён."),
+        keyboards.settings_keyboard(),
+    )
+    await state.clear()
 
 
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_LIST_PREFIX))
@@ -184,13 +393,82 @@ async def _send_notice(callback: CallbackQuery, text: str) -> None:
         log.exception("failed to send notice: %s", text)
 
 
-async def _safe_edit(callback: CallbackQuery, text: str, markup) -> None:
+async def _ensure_callback_allowed(callback: CallbackQuery, settings: Settings) -> bool:
+    if _is_allowed_chat(callback.message.chat.id, settings):
+        return True
+    await callback.answer("Нет доступа к настройкам", show_alert=True)
+    return False
+
+
+def _is_allowed_chat(chat_id: int, settings: Settings) -> bool:
+    return str(chat_id) == str(settings.telegram_chat_id)
+
+
+async def _safe_edit(
+    callback: CallbackQuery,
+    text: str,
+    markup: InlineKeyboardMarkup | None,
+    *,
+    parse_mode: str | None = "HTML",
+) -> None:
     try:
-        await callback.message.edit_text(text, reply_markup=markup)
+        await callback.message.edit_text(text, reply_markup=markup, parse_mode=parse_mode)
     except TelegramBadRequest as exc:
         if "message is not modified" in str(exc):
             return
         log.exception("editMessageText failed")
+
+
+async def _remember_menu_message(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.update_data(
+        menu_chat_id=callback.message.chat.id,
+        menu_message_id=callback.message.message_id,
+    )
+
+
+async def _edit_menu_from_state(
+    message: Message,
+    state: FSMContext,
+    text: str,
+    markup: InlineKeyboardMarkup,
+    *,
+    parse_mode: str | None = "HTML",
+) -> None:
+    data = await state.get_data()
+    chat_id = data.get("menu_chat_id")
+    message_id = data.get("menu_message_id")
+    if chat_id is not None and message_id is not None:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=int(chat_id),
+                message_id=int(message_id),
+                text=text,
+                reply_markup=markup,
+                parse_mode=parse_mode,
+            )
+            return
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc):
+                return
+            log.exception("editMessageText failed for settings flow")
+    try:
+        await message.answer(text, reply_markup=markup, parse_mode=parse_mode)
+    except TelegramAPIError:
+        log.exception("failed to send settings flow message")
+
+
+async def _delete_user_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except TelegramAPIError:
+        log.exception("failed to delete user settings message")
+
+
+def _parse_skill_id_suffix(data: str, prefix: str) -> int:
+    try:
+        return int(data[len(prefix):])
+    except ValueError:
+        return 0
 
 
 def _parse_list_data(data: str) -> tuple[str, int]:

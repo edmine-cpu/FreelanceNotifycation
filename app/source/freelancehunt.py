@@ -41,13 +41,17 @@ class FreelancehuntSource:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    def set_categories(self, categories: list[Category]) -> None:
+        self._categories = list(categories)
+
     async def fetch_projects(self) -> list[Project]:
+        categories = list(self._categories)
         results = await asyncio.gather(
-            *(self._fetch_category(category) for category in self._categories),
+            *(self._fetch_category(category) for category in categories),
             return_exceptions=True,
         )
         projects: list[Project] = []
-        for category, result in zip(self._categories, results):
+        for category, result in zip(categories, results):
             if isinstance(result, Exception):
                 log.error(
                     "failed to fetch category %s (skill %d): %s",

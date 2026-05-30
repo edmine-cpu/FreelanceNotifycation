@@ -10,6 +10,12 @@ CALLBACK_REGEN_PREFIX = "regen:"
 CALLBACK_HIDE = "hide"
 CALLBACK_SHOW_PREFIX = "show:"
 CALLBACK_GEN_PREFIX = "gen:"
+CALLBACK_SETTINGS = "settings"
+CALLBACK_ADD_CATEGORY = "settings:add_category"
+CALLBACK_PROMPT_JSON = "settings:prompt_json"
+CALLBACK_PROMPT_EDIT = "settings:prompt_edit"
+CALLBACK_NOTIFICATIONS = "settings:notifications"
+CALLBACK_TOGGLE_MUTE_PREFIX = "settings:toggle_mute:"
 
 # Filter key used in `list:<filter>:<page>` callbacks to mean "every category".
 LIST_FILTER_ALL = "all"
@@ -46,7 +52,56 @@ def start_menu_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
     rows.append(
         [InlineKeyboardButton(text="📋 Все", callback_data=list_callback(LIST_FILTER_ALL, 0))]
     )
+    rows.append([InlineKeyboardButton(text="⚙️ Настройки", callback_data=CALLBACK_SETTINGS)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def settings_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить новую категорию по ID", callback_data=CALLBACK_ADD_CATEGORY)],
+            [InlineKeyboardButton(text="📝 Изменить промт", callback_data=CALLBACK_PROMPT_JSON)],
+            [InlineKeyboardButton(text="🔔 Уведомления категорий", callback_data=CALLBACK_NOTIFICATIONS)],
+            [InlineKeyboardButton(text="🏠 В меню", callback_data=CALLBACK_START)],
+        ]
+    )
+
+
+def category_notifications_keyboard(
+    categories: list[Category],
+    muted_skill_ids: set[int],
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for category in categories:
+        muted = category.skill_id in muted_skill_ids
+        icon = "🔕" if muted else "🔔"
+        status = "выкл" if muted else "вкл"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{icon} {status} · {_truncate(category.name)}",
+                    callback_data=f"{CALLBACK_TOGGLE_MUTE_PREFIX}{category.skill_id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def prompt_json_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✏️ Изменить JSON", callback_data=CALLBACK_PROMPT_EDIT)],
+            [InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)],
+            [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
+        ]
+    )
+
+
+def settings_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)]]
+    )
 
 
 def projects_page_keyboard(

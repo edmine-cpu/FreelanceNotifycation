@@ -33,6 +33,8 @@ class StateStore:
         # Watermark per skill_id: the publish timestamp of the last announced
         # project in that category. Absence of an entry means "not yet seen".
         self._watermarks: dict[str, int] = {}
+        self._skill_ids: list[int] | None = None
+        self._muted_skill_ids: list[int] = []
         self._load_sync()
 
     def _load_sync(self) -> None:
@@ -52,6 +54,12 @@ class StateStore:
         # Older single-int formats are intentionally dropped: every category is
         # then treated as first-seen and its current backlog is suppressed
         # (guarded further by seen_ids) instead of being re-announced.
+        raw_skill_ids = data.get("skill_ids")
+        if isinstance(raw_skill_ids, list):
+            skill_ids = _dedupe_ints(raw_skill_ids)
+            if skill_ids:
+                self._skill_ids = skill_ids
+        self._muted_skill_ids = _dedupe_ints(data.get("muted_skill_ids", []))
 
     async def _persist_locked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,6 +68,8 @@ class StateStore:
             "passed_ids": self._passed_ids,
             "projects": [p.to_dict() for p in self._projects],
             "last_published_ts": self._watermarks,
+            "skill_ids": self._skill_ids,
+            "muted_skill_ids": self._muted_skill_ids,
         }
         tmp = self._path.with_suffix(".tmp")
         async with aiofiles.open(tmp, "w", encoding="utf-8") as f:
@@ -120,6 +130,37 @@ class StateStore:
         async with self._lock:
             return set(self._passed_ids)
 
+    async def skill_ids(self, fallback: list[int]) -> list[int]:
+        async with self._lock:
+            return list(self._skill_ids if self._skill_ids is not None else fallback)
+
+    async def add_skill_id(self, skill_id: int, fallback: list[int]) -> bool:
+        """Persist a watched skill id. Returns False when it already exists."""
+        async with self._lock:
+            current = list(self._skill_ids if self._skill_ids is not None else fallback)
+            if skill_id in current:
+                return False
+            current.append(skill_id)
+            self._skill_ids = current
+            await self._persist_locked()
+            return True
+
+    async def muted_skill_ids(self) -> set[int]:
+        async with self._lock:
+            return set(self._muted_skill_ids)
+
+    async def toggle_muted_skill_id(self, skill_id: int) -> bool:
+        """Toggle category notifications. Returns True when muted after toggle."""
+        async with self._lock:
+            if skill_id in self._muted_skill_ids:
+                self._muted_skill_ids = [x for x in self._muted_skill_ids if x != skill_id]
+                muted = False
+            else:
+                self._muted_skill_ids.append(skill_id)
+                muted = True
+            await self._persist_locked()
+            return muted
+
     async def add_projects(self, projects: list[Project]) -> None:
         if not projects:
             return
@@ -158,3 +199,19 @@ class StateStore:
             if key not in self._watermarks or ts > self._watermarks[key]:
                 self._watermarks[key] = ts
                 await self._persist_locked()
+
+
+def _dedupe_ints(values: object) -> list[int]:
+    if not isinstance(values, list):
+        return []
+    result: list[int] = []
+    seen: set[int] = set()
+    for value in values:
+        try:
+            item = int(value)
+        except (TypeError, ValueError):
+            continue
+        if item > 0 and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result

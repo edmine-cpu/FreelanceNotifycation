@@ -37,9 +37,14 @@ class BidGenerator:
         rates_provider: RatesProvider | None = None,
     ) -> None:
         self._client = client
-        self._system_prompt = system_prompt_path.read_text(encoding="utf-8").strip()
-        self._examples = json.loads(examples_path.read_text(encoding="utf-8"))
+        self._system_prompt_path = system_prompt_path
+        self._examples_path = examples_path
         self._rates_provider = rates_provider
+        self.reload_prompt()
+
+    def reload_prompt(self) -> None:
+        self._system_prompt = self._system_prompt_path.read_text(encoding="utf-8").strip()
+        self._examples = json.loads(self._examples_path.read_text(encoding="utf-8"))
 
     async def generate(self, project: Project, language: Language | None = None) -> str:
         lang: Language = language or detect_language(f"{project.title}\n{project.description}")

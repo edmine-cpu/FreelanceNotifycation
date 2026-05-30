@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     skill_ids: str = "180"
     poll_interval: int = 60
     state_file: Path = Path("/data/state.json")
+    prompt_examples_file: Path | None = None
     send_existing_on_first_run: bool = False
     page_size: int = 5
     history_size: int = 50

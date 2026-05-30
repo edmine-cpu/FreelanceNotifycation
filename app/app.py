@@ -4,6 +4,7 @@ import signal
 
 from app.config import Settings
 from app.ai import BidGenerator, GroqClient, OrderScreener
+from app.ai.prompt_store import ensure_prompt_json
 from app.notifier import NotifierLoop
 from app.rates import RatesProvider
 from app.source import FreelancehuntSource
@@ -14,6 +15,13 @@ log = logging.getLogger(__name__)
 
 
 async def run(settings: Settings) -> None:
+    store = StateStore(settings.state_file, history_size=settings.history_size)
+    skill_ids = await store.skill_ids([category.skill_id for category in settings.categories])
+    settings.skill_ids = ",".join(str(skill_id) for skill_id in skill_ids)
+    prompt_examples_path = settings.prompt_examples_file or settings.state_file.with_name(
+        "bids_examples.json"
+    )
+    ensure_prompt_json(prompt_examples_path)
     categories = settings.categories
     log.info(
         "watching %d categories: %s",
@@ -21,7 +29,6 @@ async def run(settings: Settings) -> None:
         ", ".join(f"{c.name} (skill {c.skill_id})" for c in categories),
     )
     bot = build_bot(settings.telegram_bot_token.get_secret_value())
-    store = StateStore(settings.state_file, history_size=settings.history_size)
     source = FreelancehuntSource(
         token=settings.freelancehunt_token.get_secret_value(),
         categories=categories,
@@ -36,7 +43,11 @@ async def run(settings: Settings) -> None:
             timeout=settings.groq_timeout_sec,
         )
         rates_provider = RatesProvider(fallback=settings.fallback_rates)
-        bid_generator = BidGenerator(groq, rates_provider=rates_provider)
+        bid_generator = BidGenerator(
+            groq,
+            examples_path=prompt_examples_path,
+            rates_provider=rates_provider,
+        )
         # Primary check is fail-open and runs on every new project inside a tick,
         # so it must not block: give it its own client with minimal retries
         # instead of the bid generator's full backoff. The secondary pass keeps
@@ -52,7 +63,13 @@ async def run(settings: Settings) -> None:
     else:
         log.info("ai disabled (no API key or GROQ_ENABLED=false)")
 
-    dispatcher = build_dispatcher(settings, store, bid_generator, source)
+    dispatcher = build_dispatcher(
+        settings,
+        store,
+        bid_generator,
+        source,
+        prompt_examples_path=prompt_examples_path,
+    )
     notifier = NotifierLoop(bot, store, source, settings, screener=screener)
 
     stop_event = asyncio.Event()

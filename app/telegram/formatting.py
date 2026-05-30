@@ -41,6 +41,37 @@ def format_start_menu(category_label: str) -> str:
     )
 
 
+def format_settings_menu(category_label: str, muted_count: int) -> str:
+    muted_line = f"\nОтключено уведомлений: <b>{muted_count}</b>" if muted_count else ""
+    return f"<b>Настройки:</b>\n\nКатегории: {html.escape(category_label)}{muted_line}"
+
+
+def format_category_notifications(category_label: str) -> str:
+    return (
+        "<b>Уведомления категорий</b>\n\n"
+        f"Категории: {html.escape(category_label)}\n"
+        "Нажми на категорию, чтобы включить или отключить уведомления."
+    )
+
+
+def format_add_category_prompt() -> str:
+    return (
+        "<b>Добавить новую категорию</b>\n\n"
+        "Отправь ID категории FreelanceHunt одним сообщением."
+    )
+
+
+def format_prompt_edit_prompt() -> str:
+    return (
+        "<b>Изменить промт</b>\n\n"
+        "Отправь новый JSON целиком одним сообщением."
+    )
+
+
+def format_settings_notice(text: str) -> str:
+    return f"<b>Настройки:</b>\n\n{html.escape(text)}"
+
+
 def format_projects_page_header(category_label: str, page: int, total_pages: int, total: int) -> str:
     return (
         f"<b>Последние проекты</b> — {html.escape(category_label)}\n"
