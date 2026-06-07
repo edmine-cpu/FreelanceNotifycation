@@ -30,6 +30,13 @@ def category_notifications_view(
     )
 
 
+def category_names_view(settings: Settings) -> tuple[str, InlineKeyboardMarkup]:
+    return (
+        formatting.format_category_names(settings.category_label),
+        keyboards.category_names_keyboard(settings.categories),
+    )
+
+
 def projects_page_view(
     projects: list[Project],
     page: int,

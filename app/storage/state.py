@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import aiofiles
@@ -35,6 +36,7 @@ class StateStore:
         self._watermarks: dict[str, int] = {}
         self._skill_ids: list[int] | None = None
         self._muted_skill_ids: list[int] = []
+        self._category_names: dict[int, str] = {}
         self._load_sync()
 
     def _load_sync(self) -> None:
@@ -60,6 +62,8 @@ class StateStore:
             if skill_ids:
                 self._skill_ids = skill_ids
         self._muted_skill_ids = _dedupe_ints(data.get("muted_skill_ids", []))
+        self._category_names = _clean_category_names(data.get("category_names", {}))
+        self._apply_category_names_to_projects()
 
     async def _persist_locked(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,6 +74,7 @@ class StateStore:
             "last_published_ts": self._watermarks,
             "skill_ids": self._skill_ids,
             "muted_skill_ids": self._muted_skill_ids,
+            "category_names": self._category_names,
         }
         tmp = self._path.with_suffix(".tmp")
         async with aiofiles.open(tmp, "w", encoding="utf-8") as f:
@@ -145,6 +150,21 @@ class StateStore:
             await self._persist_locked()
             return True
 
+    async def category_names(self, fallback: dict[int, str] | None = None) -> dict[int, str]:
+        async with self._lock:
+            names = _clean_category_names(fallback or {})
+            names.update(self._category_names)
+            return dict(names)
+
+    async def set_category_name(self, skill_id: int, name: str) -> None:
+        clean_name = _normalize_category_name(name)
+        if skill_id <= 0 or not clean_name:
+            raise ValueError("category name requires a positive skill_id and non-empty name")
+        async with self._lock:
+            self._category_names[skill_id] = clean_name
+            self._apply_category_names_to_projects()
+            await self._persist_locked()
+
     async def muted_skill_ids(self) -> set[int]:
         async with self._lock:
             return set(self._muted_skill_ids)
@@ -178,6 +198,7 @@ class StateStore:
                 group.sort(key=lambda p: p.published_ts, reverse=True)
                 kept.extend(group[: self._history_size])
             self._projects = sorted(kept, key=lambda p: p.published_ts, reverse=True)
+            self._apply_category_names_to_projects()
             await self._persist_locked()
 
     async def recent_projects(self) -> list[Project]:
@@ -200,6 +221,21 @@ class StateStore:
                 self._watermarks[key] = ts
                 await self._persist_locked()
 
+    def _apply_category_names_to_projects(self) -> None:
+        if not self._category_names or not self._projects:
+            return
+        updated: list[Project] = []
+        changed = False
+        for project in self._projects:
+            category_name = self._category_names.get(project.skill_id)
+            if category_name and project.category_name != category_name:
+                updated.append(replace(project, category_name=category_name))
+                changed = True
+            else:
+                updated.append(project)
+        if changed:
+            self._projects = updated
+
 
 def _dedupe_ints(values: object) -> list[int]:
     if not isinstance(values, list):
@@ -215,3 +251,24 @@ def _dedupe_ints(values: object) -> list[int]:
             seen.add(item)
             result.append(item)
     return result
+
+
+def _clean_category_names(values: object) -> dict[int, str]:
+    if not isinstance(values, dict):
+        return {}
+    result: dict[int, str] = {}
+    for raw_skill_id, raw_name in values.items():
+        try:
+            skill_id = int(raw_skill_id)
+        except (TypeError, ValueError):
+            continue
+        name = _normalize_category_name(raw_name)
+        if skill_id > 0 and name:
+            result[skill_id] = name
+    return result
+
+
+def _normalize_category_name(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())

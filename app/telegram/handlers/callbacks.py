@@ -15,17 +15,25 @@ from app.source import FreelancehuntSource
 from app.storage import StateStore
 
 from .. import formatting, keyboards
-from ..views import category_notifications_view, projects_page_view, settings_view, start_view
+from ..views import (
+    category_names_view,
+    category_notifications_view,
+    projects_page_view,
+    settings_view,
+    start_view,
+)
 
 router = Router(name="callbacks")
 log = logging.getLogger(__name__)
 
 _QUOTA_NOTICE = "Лимит запросов к ИИ исчерпан. Попробуйте позже."
 _TELEGRAM_TEXT_LIMIT = 4096
+_MAX_CATEGORY_NAME_LENGTH = 80
 
 
 class SettingsFlow(StatesGroup):
     awaiting_category_id = State()
+    awaiting_category_name = State()
     awaiting_prompt_json = State()
 
 
@@ -117,6 +125,44 @@ async def handle_prompt_json(
     await callback.answer()
 
 
+@router.callback_query(F.data == keyboards.CALLBACK_CATEGORY_NAMES)
+async def handle_category_names_menu(
+    callback: CallbackQuery,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.clear()
+    text, markup = category_names_view(settings)
+    await _safe_edit(callback, text, markup)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(keyboards.CALLBACK_EDIT_CATEGORY_NAME_PREFIX))
+async def handle_category_name_edit_menu(
+    callback: CallbackQuery,
+    settings: Settings,
+    state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    skill_id = _parse_skill_id_suffix(callback.data or "", keyboards.CALLBACK_EDIT_CATEGORY_NAME_PREFIX)
+    category = _find_category(settings, skill_id)
+    if category is None:
+        await callback.answer("Категория не найдена", show_alert=True)
+        return
+    await state.set_state(SettingsFlow.awaiting_category_name)
+    await state.update_data(category_name_skill_id=skill_id)
+    await _remember_menu_message(callback, state)
+    await _safe_edit(
+        callback,
+        formatting.format_category_name_prompt(category.skill_id, category.name),
+        keyboards.category_names_back_keyboard(),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == keyboards.CALLBACK_PROMPT_EDIT)
 async def handle_prompt_edit_menu(
     callback: CallbackQuery,
@@ -205,10 +251,72 @@ async def handle_category_id_message(
     await _delete_user_message(message)
 
     if added:
-        text = formatting.format_settings_notice(f"Категория #{skill_id} добавлена.")
+        text = formatting.format_settings_notice(
+            f"Категория #{skill_id} добавлена. Имя можно задать в разделе «Имена категорий»."
+        )
     else:
         text = formatting.format_settings_notice(f"Категория #{skill_id} уже есть в списке.")
     await _edit_menu_from_state(message, state, text, keyboards.settings_keyboard())
+    await state.clear()
+
+
+@router.message(SettingsFlow.awaiting_category_name)
+async def handle_category_name_message(
+    message: Message,
+    settings: Settings,
+    store: StateStore,
+    source: FreelancehuntSource,
+    state: FSMContext,
+) -> None:
+    if not _is_allowed_chat(message.chat.id, settings):
+        await _delete_user_message(message)
+        return
+
+    data = await state.get_data()
+    try:
+        skill_id = int(data.get("category_name_skill_id", 0))
+    except (TypeError, ValueError):
+        skill_id = 0
+    category = _find_category(settings, skill_id)
+    if category is None:
+        await _delete_user_message(message)
+        await _edit_menu_from_state(
+            message,
+            state,
+            formatting.format_settings_notice("Категория не найдена. Выбери её заново."),
+            keyboards.category_names_keyboard(settings.categories),
+        )
+        await state.clear()
+        return
+
+    name = _normalize_category_name(message.text or "")
+    if not name:
+        await _edit_menu_from_state(
+            message,
+            state,
+            formatting.format_settings_notice("Имя не должно быть пустым. Отправь имя ещё раз."),
+            keyboards.category_names_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+    if len(name) > _MAX_CATEGORY_NAME_LENGTH:
+        await _edit_menu_from_state(
+            message,
+            state,
+            formatting.format_settings_notice(
+                f"Имя слишком длинное: максимум {_MAX_CATEGORY_NAME_LENGTH} символов."
+            ),
+            keyboards.category_names_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+
+    await store.set_category_name(skill_id, name)
+    settings.category_names = await store.category_names(settings.category_names)
+    source.set_categories(settings.categories)
+    await _delete_user_message(message)
+    text, markup = category_names_view(settings)
+    await _edit_menu_from_state(message, state, text, markup)
     await state.clear()
 
 
@@ -524,3 +632,11 @@ def _parse_raw_data(data: str) -> tuple[int, int]:
         except ValueError:
             page = 0
     return skill_id, page
+
+
+def _find_category(settings: Settings, skill_id: int):
+    return next((category for category in settings.categories if category.skill_id == skill_id), None)
+
+
+def _normalize_category_name(raw: str) -> str:
+    return " ".join(raw.split())

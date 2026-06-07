@@ -12,6 +12,8 @@ CALLBACK_SHOW_PREFIX = "show:"
 CALLBACK_GEN_PREFIX = "gen:"
 CALLBACK_SETTINGS = "settings"
 CALLBACK_ADD_CATEGORY = "settings:add_category"
+CALLBACK_CATEGORY_NAMES = "settings:category_names"
+CALLBACK_EDIT_CATEGORY_NAME_PREFIX = "settings:edit_name:"
 CALLBACK_PROMPT_JSON = "settings:prompt_json"
 CALLBACK_PROMPT_EDIT = "settings:prompt_edit"
 CALLBACK_NOTIFICATIONS = "settings:notifications"
@@ -60,6 +62,7 @@ def settings_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="➕ Добавить новую категорию по ID", callback_data=CALLBACK_ADD_CATEGORY)],
+            [InlineKeyboardButton(text="🏷️ Имена категорий", callback_data=CALLBACK_CATEGORY_NAMES)],
             [InlineKeyboardButton(text="📝 Изменить промт", callback_data=CALLBACK_PROMPT_JSON)],
             [InlineKeyboardButton(text="🔔 Уведомления категорий", callback_data=CALLBACK_NOTIFICATIONS)],
             [InlineKeyboardButton(text="🏠 В меню", callback_data=CALLBACK_START)],
@@ -86,6 +89,30 @@ def category_notifications_keyboard(
         )
     rows.append([InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def category_names_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for category in categories:
+        label = _truncate(f"{category.skill_id} · {category.name}")
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"✏️ {label}",
+                    callback_data=f"{CALLBACK_EDIT_CATEGORY_NAME_PREFIX}{category.skill_id}",
+                )
+            ]
+        )
+    rows.append([InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def category_names_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⬅️ Имена категорий", callback_data=CALLBACK_CATEGORY_NAMES)]
+        ]
+    )
 
 
 def prompt_json_keyboard() -> InlineKeyboardMarkup:

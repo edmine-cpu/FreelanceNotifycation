@@ -54,10 +54,27 @@ def format_category_notifications(category_label: str) -> str:
     )
 
 
+def format_category_names(category_label: str) -> str:
+    return (
+        "<b>Имена категорий</b>\n\n"
+        f"Категории: {html.escape(category_label)}\n"
+        "Нажми на категорию, чтобы задать или изменить имя."
+    )
+
+
 def format_add_category_prompt() -> str:
     return (
         "<b>Добавить новую категорию</b>\n\n"
         "Отправь ID категории FreelanceHunt одним сообщением."
+    )
+
+
+def format_category_name_prompt(skill_id: int, current_name: str) -> str:
+    return (
+        "<b>Имя категории</b>\n\n"
+        f"ID: <code>{skill_id}</code>\n"
+        f"Сейчас: <b>{html.escape(current_name)}</b>\n\n"
+        "Отправь новое имя одним сообщением."
     )
 
 

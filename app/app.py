@@ -18,6 +18,7 @@ async def run(settings: Settings) -> None:
     store = StateStore(settings.state_file, history_size=settings.history_size)
     skill_ids = await store.skill_ids([category.skill_id for category in settings.categories])
     settings.skill_ids = ",".join(str(skill_id) for skill_id in skill_ids)
+    settings.category_names = await store.category_names(settings.category_names)
     prompt_examples_path = settings.prompt_examples_file or settings.state_file.with_name(
         "bids_examples.json"
     )

@@ -36,10 +36,13 @@ def parse_skill_ids(raw: str) -> list[int]:
     return result
 
 
-def build_category(skill_id: int) -> Category:
+def build_category(skill_id: int, category_names: dict[int, str] | None = None) -> Category:
+    custom_name = ""
+    if category_names:
+        custom_name = (category_names.get(skill_id) or "").strip()
     return Category(
         skill_id=skill_id,
-        name=SKILL_NAMES.get(skill_id, f"Категория #{skill_id}"),
+        name=custom_name or SKILL_NAMES.get(skill_id, f"Категория #{skill_id}"),
         listing_url=LISTING_URL_TEMPLATE.format(skill_id=skill_id),
     )
 
@@ -60,6 +63,9 @@ class Settings(BaseSettings):
     # Kept as a string (not list[int]) to avoid pydantic-settings JSON-decoding
     # of complex env values; parsed into categories below.
     skill_ids: str = "180"
+    # Runtime overrides loaded from StateStore. This is intentionally not part of
+    # SKILL_NAMES so users can rename unknown categories from Telegram settings.
+    category_names: dict[int, str] = Field(default_factory=dict)
     poll_interval: int = 60
     state_file: Path = Path("/data/state.json")
     prompt_examples_file: Path | None = None
@@ -86,7 +92,10 @@ class Settings(BaseSettings):
 
     @property
     def categories(self) -> list[Category]:
-        return [build_category(skill_id) for skill_id in parse_skill_ids(self.skill_ids)]
+        return [
+            build_category(skill_id, self.category_names)
+            for skill_id in parse_skill_ids(self.skill_ids)
+        ]
 
     @property
     def category_label(self) -> str:
