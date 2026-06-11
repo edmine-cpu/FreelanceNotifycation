@@ -3,7 +3,7 @@ import logging
 import signal
 
 from app.config import Settings
-from app.ai import BidGenerator, GroqClient, OrderScreener
+from app.ai import BidGenerator, GeminiClient, OrderScreener
 from app.ai.prompt_store import ensure_prompt_json
 from app.notifier import NotifierLoop
 from app.rates import RatesProvider
@@ -38,14 +38,14 @@ async def run(settings: Settings) -> None:
     bid_generator: BidGenerator | None = None
     screener: OrderScreener | None = None
     if settings.ai_active:
-        groq = GroqClient(
-            api_key=settings.groq_api_key.get_secret_value(),
-            model=settings.groq_model,
-            timeout=settings.groq_timeout_sec,
+        gemini = GeminiClient(
+            api_key=settings.gemini_api_key.get_secret_value(),
+            model=settings.gemini_model,
+            timeout=settings.gemini_timeout_sec,
         )
         rates_provider = RatesProvider(fallback=settings.fallback_rates)
         bid_generator = BidGenerator(
-            groq,
+            gemini,
             examples_path=prompt_examples_path,
             rates_provider=rates_provider,
         )
@@ -53,16 +53,16 @@ async def run(settings: Settings) -> None:
         # so it must not block: give it its own client with minimal retries
         # instead of the bid generator's full backoff. The secondary pass keeps
         # full retries — it's user-triggered and wants to succeed.
-        screen_client = GroqClient(
-            api_key=settings.groq_api_key.get_secret_value(),
-            model=settings.groq_model,
-            timeout=settings.groq_timeout_sec,
+        screen_client = GeminiClient(
+            api_key=settings.gemini_api_key.get_secret_value(),
+            model=settings.gemini_model,
+            timeout=settings.gemini_timeout_sec,
             max_retries=1,
         )
         screener = OrderScreener(screen_client)
-        log.info("ai enabled, model=%s", settings.groq_model)
+        log.info("ai enabled, model=%s", settings.gemini_model)
     else:
-        log.info("ai disabled (no API key or GROQ_ENABLED=false)")
+        log.info("ai disabled (no API key or GEMINI_ENABLED=false)")
 
     dispatcher = build_dispatcher(
         settings,

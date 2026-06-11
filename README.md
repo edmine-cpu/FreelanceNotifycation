@@ -9,7 +9,7 @@ Telegram-бот в Docker. Раз в минуту через **официаль�
 категорией.
 
 К каждому уведомлению бот **reply'ом** присылает черновик ставки,
-сгенерированный ИИ (Groq) в стиле твоих прошлых заявок. В строке цены и срока
+сгенерированный ИИ (Gemini) в стиле твоих прошлых заявок. В строке цены и срока
 оставлены литералы `{price}` и `{deadline}` — подставляешь руками перед
 отправкой. У каждой ставки есть кнопка **«🔄 Перегенерировать»**.
 
@@ -24,9 +24,9 @@ Telegram-бот в Docker. Раз в минуту через **официаль�
    Напиши боту `/start` — иначе Telegram не даст слать тебе сообщения.
 3. Получи `FREELANCEHUNT_TOKEN`: <https://freelancehunt.com/my/api> →
    *Personal Access Token*.
-4. Получи `GROQ_API_KEY`: <https://console.groq.com/keys> →
-   *Create API Key* (бесплатно, без карты). Бесплатный тариф `llama-3.3-70b-versatile` —
-   ~1000 запросов в сутки; мелкие модели — до 14 400 в сутки.
+4. Получи `GEMINI_API_KEY`: <https://aistudio.google.com/app/apikey> →
+   *Create API Key*. По умолчанию используется `gemini-3.1-pro-preview`
+   как рабочая замена отключенного `gemini-3-pro-preview`.
 5. Скопируй пример конфига и заполни значения:
 
    ```sh
@@ -59,10 +59,10 @@ Telegram-бот в Docker. Раз в минуту через **официаль�
 | `SEND_EXISTING_ON_FIRST_RUN` | `false`            | При первом запуске прислать все имеющиеся проекты                                       |
 | `PAGE_SIZE`                  | `5`                | Размер страницы в списке `/start`                                                       |
 | `HISTORY_SIZE`               | `50`               | Сколько последних проектов хранить для пагинации                                        |
-| `GROQ_API_KEY`               | —                       | Ключ Groq Console. Если пустой — генерация ставок выключена                        |
-| `GROQ_MODEL`                 | `llama-3.3-70b-versatile` | Имя модели Groq                                                                  |
-| `GROQ_ENABLED`               | `true`                  | Глобальный тоггл генерации ставок                                                   |
-| `GROQ_TIMEOUT_SEC`           | `20`                    | Таймаут запроса к Groq API                                                          |
+| `GEMINI_API_KEY`             | —                       | Ключ Gemini API. Если пустой — генерация ставок выключена                           |
+| `GEMINI_MODEL`               | `gemini-3.1-pro-preview` | Имя модели Gemini                                                                  |
+| `GEMINI_ENABLED`             | `true`                  | Глобальный тоггл генерации ставок                                                   |
+| `GEMINI_TIMEOUT_SEC`         | `20`                    | Таймаут запроса к Gemini API                                                        |
 
 ### Добавить категорию
 
@@ -105,7 +105,7 @@ app/
       callbacks.py                # Router: меню, настройки, списки, генерация ставок
   notifier/loop.py                # NotifierLoop: парс → отправка уведомления → reply со ставкой
   ai/
-    client.py                     # GroqClient: OpenAI-совместимый Groq API через httpx (async)
+    client.py                     # GeminiClient: Gemini REST API через httpx (async)
     bid_generator.py              # few-shot prompt builder, detect_language
     prompt_store.py               # чтение/валидация редактируемого JSON промта
     prompts/
