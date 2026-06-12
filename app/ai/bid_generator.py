@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Literal
 
-from app.llm import ChatMessage, LLMClient, LLMError
+from app.llm import ChatMessage, LLMClient, LLMError, QuotaExceededError
 from app.projects import Project
 from app.rates import RatesProvider
 
@@ -55,10 +55,11 @@ class BidGenerator:
                 system_instruction=self._system_prompt,
                 messages=messages,
             )
-        except LLMError:
-            # Quota / rate-limit and other typed LLM failures keep their type so
-            # callers can react specifically (e.g. show a "limit reached" notice).
+        except QuotaExceededError:
+            # Keep quota/rate-limit separate so callers can show a precise notice.
             raise
+        except LLMError as exc:
+            raise BidGenerationError(str(exc)) from exc
         except Exception as exc:
             raise BidGenerationError(str(exc)) from exc
 

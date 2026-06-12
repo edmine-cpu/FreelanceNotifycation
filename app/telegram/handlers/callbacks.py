@@ -448,8 +448,8 @@ async def handle_generate(
         log.warning("ai quota exhausted on generate for project %s", project_id)
         await _send_notice(callback, _QUOTA_NOTICE)
         return
-    except BidGenerationError:
-        log.exception("generate failed for project %s", project_id)
+    except BidGenerationError as exc:
+        log.exception("generate failed for project %s: %s", project_id, exc)
         await _send_notice(callback, "Не удалось сгенерировать ответ")
         return
 
@@ -486,8 +486,8 @@ async def handle_regen(
         log.warning("ai quota exhausted on regen for project %s", project_id)
         await _send_notice(callback, _QUOTA_NOTICE)
         return
-    except BidGenerationError:
-        log.exception("regen failed for project %s", project_id)
+    except BidGenerationError as exc:
+        log.exception("regen failed for project %s: %s", project_id, exc)
         await _send_notice(callback, "Не удалось перегенерировать ответ")
         return
 

@@ -19,6 +19,11 @@ class LLMError(Exception):
     """Base class for failures coming from an LLM client."""
 
 
+class LLMResponseError(LLMError):
+    """The provider returned a successful HTTP response that cannot be used as
+    generated text."""
+
+
 class QuotaExceededError(LLMError):
     """The model rejected the request because a quota or rate limit is exhausted
     (HTTP 429). Distinct from transient errors: the caller should back off / wait,

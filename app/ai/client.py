@@ -3,7 +3,7 @@ import logging
 
 import httpx
 
-from app.llm import ChatMessage, QuotaExceededError
+from app.llm import ChatMessage, LLMError, LLMResponseError, QuotaExceededError
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +58,10 @@ class GeminiClient:
                         self._api_url, headers=self._headers, json=payload
                     )
                 response.raise_for_status()
-                text = _extract_text(response.json())
+                data = _response_json(response)
+                text = _extract_text(data)
                 if not text:
-                    raise RuntimeError("Gemini returned empty response")
+                    raise LLMResponseError(_empty_response_message(data))
                 return text
             except httpx.HTTPStatusError as exc:
                 last_exc = exc
@@ -72,7 +73,7 @@ class GeminiClient:
                         raise QuotaExceededError(
                             _error_message(exc.response), retry_after=retry_after
                         ) from exc
-                    raise
+                    raise LLMError(_http_error_message(exc.response)) from exc
                 # On 429, Gemini may tell us exactly how long to wait via Retry-After.
                 delay = (
                     retry_after
@@ -88,7 +89,10 @@ class GeminiClient:
                 # Covers timeouts and network errors; both are worth retrying.
                 last_exc = exc
                 if attempt == self._max_retries:
-                    raise
+                    raise LLMError(
+                        "Gemini request failed after "
+                        f"{attempt + 1} attempts: {type(exc).__name__}: {exc}"
+                    ) from exc
                 delay = self._retry_base_delay * (2 ** attempt)
                 log.warning(
                     "gemini request error (%s), retrying in %.1fs (attempt %d/%d)",
@@ -115,6 +119,79 @@ def _extract_text(data: object) -> str:
         return ""
 
 
+def _response_json(response: httpx.Response) -> object:
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise LLMResponseError(
+            "Gemini returned non-JSON response: "
+            f"{_shorten(response.text, limit=500)}"
+        ) from exc
+
+
+def _empty_response_message(data: object) -> str:
+    details = _empty_response_details(data)
+    if details:
+        return f"Gemini returned empty text response ({details})"
+    return "Gemini returned empty text response"
+
+
+def _empty_response_details(data: object) -> str:
+    if not isinstance(data, dict):
+        return f"response_type={type(data).__name__}"
+
+    details: list[str] = []
+    prompt_feedback = data.get("promptFeedback")
+    if isinstance(prompt_feedback, dict):
+        block_reason = prompt_feedback.get("blockReason")
+        if block_reason:
+            details.append(f"prompt_block_reason={block_reason}")
+        prompt_safety = _format_safety(prompt_feedback.get("safetyRatings"))
+        if prompt_safety:
+            details.append(f"prompt_safety={prompt_safety}")
+
+    candidates = data.get("candidates")
+    if isinstance(candidates, list):
+        details.append(f"candidates={len(candidates)}")
+        if candidates:
+            candidate = candidates[0]
+            if isinstance(candidate, dict):
+                finish_reason = candidate.get("finishReason")
+                if finish_reason:
+                    details.append(f"finish_reason={finish_reason}")
+                safety = _format_safety(candidate.get("safetyRatings"))
+                if safety:
+                    details.append(f"safety={safety}")
+                content = candidate.get("content")
+                if content is None:
+                    details.append("candidate_has_no_content")
+                elif isinstance(content, dict):
+                    parts = content.get("parts")
+                    if isinstance(parts, list):
+                        details.append(f"parts={len(parts)}")
+    else:
+        details.append("candidates=missing")
+
+    return ", ".join(details)
+
+
+def _format_safety(raw: object) -> str:
+    if not isinstance(raw, list):
+        return ""
+
+    parts: list[str] = []
+    for item in raw[:4]:
+        if not isinstance(item, dict):
+            continue
+        category = item.get("category")
+        probability = item.get("probability")
+        blocked = item.get("blocked")
+        if category and probability:
+            suffix = ",blocked" if blocked is True else ""
+            parts.append(f"{category}:{probability}{suffix}")
+    return ";".join(parts)
+
+
 def _retry_after_seconds(response: httpx.Response) -> float | None:
     raw = response.headers.get("retry-after")
     if raw is None:
@@ -131,3 +208,14 @@ def _error_message(response: httpx.Response) -> str:
         return body.get("error", {}).get("message") or response.text
     except Exception:
         return response.text
+
+
+def _http_error_message(response: httpx.Response) -> str:
+    return f"Gemini HTTP {response.status_code}: {_shorten(_error_message(response))}"
+
+
+def _shorten(text: str, *, limit: int = 1000) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[: limit - 3] + "..."
