@@ -4,6 +4,7 @@ import signal
 
 from app.config import Settings
 from app.ai import BidGenerator, GeminiClient, OrderScreener
+from app.ai.pricing import AtomicQuoteStore
 from app.ai.prompt_store import ensure_prompt_json
 from app.notifier import NotifierLoop
 from app.rates import RatesProvider
@@ -48,6 +49,7 @@ async def run(settings: Settings) -> None:
             gemini,
             examples_path=prompt_examples_path,
             rates_provider=rates_provider,
+            quote_store=AtomicQuoteStore(settings.quote_file),
         )
         # Primary check is fail-open and runs on every new project inside a tick,
         # so it must not block: give it its own client with minimal retries.

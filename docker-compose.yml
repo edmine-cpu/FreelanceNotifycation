@@ -6,5 +6,6 @@ services:
     env_file: .env
     environment:
       STATE_FILE: /data/state.json
+      QUOTE_FILE: /data/quotes.json
     volumes:
       - ./data:/data

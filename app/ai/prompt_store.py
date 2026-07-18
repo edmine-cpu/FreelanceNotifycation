@@ -1,9 +1,26 @@
+import copy
+import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
+from .pricing import contains_quote_leakage, normalize_dashes
+
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 EXAMPLES_FILE = PROMPTS_DIR / "bids_examples.json"
+_LEGACY_STOCK_HASHES = {
+    "7a6c669e85fd02e46058824e27d6b18cd36ffa82daf9188cb556204012890b0c"
+}
+_PRICING_INPUT_KEYS = {
+    "budget",
+    "price",
+    "deadline",
+    "hours",
+    "hourly_rate",
+    "rates",
+    "currency",
+}
 
 
 class PromptJsonError(ValueError):
@@ -11,17 +28,18 @@ class PromptJsonError(ValueError):
 
 
 def read_prompt_json(path: Path = EXAMPLES_FILE) -> str:
-    data = _load_json(path)
+    data = sanitize_prompt_data(_load_json(path))
     return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 def ensure_prompt_json(path: Path, default_path: Path = EXAMPLES_FILE) -> None:
     if path.exists():
-        _load_json(path)
+        existing = _load_json(path)
+        if canonical_prompt_hash(existing) in _LEGACY_STOCK_HASHES:
+            _atomic_write_json(path, sanitize_prompt_data(_load_json(default_path)))
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = _load_json(default_path)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _atomic_write_json(path, sanitize_prompt_data(_load_json(default_path)))
 
 
 def write_prompt_json(raw: str, path: Path = EXAMPLES_FILE) -> None:
@@ -30,7 +48,40 @@ def write_prompt_json(raw: str, path: Path = EXAMPLES_FILE) -> None:
     except json.JSONDecodeError as exc:
         raise PromptJsonError(f"JSON не читается: {exc.msg} на строке {exc.lineno}") from None
     _validate_prompt_data(data)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    normalized = copy.deepcopy(data)
+    for example in normalized["examples"]:
+        example["output"] = normalize_dashes(example["output"])
+    sanitized = sanitize_prompt_data(data)
+    if sanitized != normalized:
+        raise PromptJsonError(
+            "Примеры должны описывать только стиль: убери budget/price/deadline/hours "
+            "и строки с ценой или сроками."
+        )
+    _atomic_write_json(path, sanitized)
+
+
+def sanitize_prompt_data(data: Any) -> dict[str, Any]:
+    """Remove pricing signals without mutating a customized source file."""
+    _validate_prompt_data(data)
+    clean = copy.deepcopy(data)
+    for example in clean["examples"]:
+        payload = example["input"]
+        for key in list(payload):
+            if str(key).lower() in _PRICING_INPUT_KEYS:
+                payload.pop(key, None)
+        lines = []
+        for line in normalize_dashes(example["output"]).splitlines():
+            if not contains_quote_leakage(line):
+                lines.append(line)
+        example["output"] = "\n".join(lines).strip()
+    return clean
+
+
+def canonical_prompt_hash(data: Any) -> str:
+    payload = json.dumps(
+        data, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -57,3 +108,22 @@ def _validate_prompt_data(data: Any) -> None:
             raise PromptJsonError(f'У примера #{index} поле "input" должно быть объектом.')
         if not isinstance(example.get("output"), str):
             raise PromptJsonError(f'У примера #{index} поле "output" должно быть строкой.')
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+    tmp = path.with_name(f".{path.name}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "wb", closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise

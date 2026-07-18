@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     send_existing_on_first_run: bool = False
     page_size: int = 5
     history_size: int = 50
+    # Kept separate from general bot state so every prose regeneration can
+    # reuse the exact same hours, price, FX snapshot, and deadline.
+    quote_file: Path = Path("/data/quotes.json")
     # Фолбэк-курсы конвертации цены (1$ = N валюты): используются, только когда
     # API курсов недоступен. Живые курсы тянутся из open.er-api.com. Правятся в .env.
     usd_uah_rate: float = 43.0
