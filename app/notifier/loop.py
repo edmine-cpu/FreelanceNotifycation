@@ -5,8 +5,9 @@ import time
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 
-from app.ai import OrderScreener
+from app.ai import BidGenerationError, BidGenerator, OrderScreener
 from app.config import Settings
+from app.llm import QuotaExceededError
 from app.projects import Project
 from app.source import FreelancehuntSource
 from app.storage import StateStore
@@ -42,12 +43,14 @@ class NotifierLoop:
         source: FreelancehuntSource,
         settings: Settings,
         screener: OrderScreener | None = None,
+        bid_generator: BidGenerator | None = None,
     ) -> None:
         self._bot = bot
         self._store = store
         self._source = source
         self._settings = settings
         self._screener = screener
+        self._bid_generator = bid_generator
 
     async def run(self, stop_event: asyncio.Event) -> None:
         log.info("starting notifier loop, interval=%ss", self._settings.poll_interval)
@@ -194,7 +197,7 @@ class NotifierLoop:
     async def _send_project(self, project: Project) -> bool:
         text = formatting.format_project_notification(project)
         try:
-            await self._bot.send_message(
+            order_message = await self._bot.send_message(
                 chat_id=self._settings.telegram_chat_id,
                 text=text,
                 reply_markup=keyboards.notification_keyboard(project.id),
@@ -203,4 +206,37 @@ class NotifierLoop:
             log.exception("failed to send project %s", project.id)
             return False
         log.info("sent project %s: %s", project.id, project.title)
+
+        if self._bid_generator is not None:
+            await self._send_bid_reply(project, order_message.message_id)
         return True
+
+    async def _send_bid_reply(self, project: Project, reply_to: int) -> None:
+        """Generate and send a bid without changing notification delivery status."""
+        assert self._bid_generator is not None
+        try:
+            bid_text = await self._bid_generator.generate(project)
+        except QuotaExceededError:
+            log.warning("ai quota exhausted on automatic bid for project %s", project.id)
+            return
+        except BidGenerationError:
+            log.exception("automatic bid generation failed for project %s", project.id)
+            return
+        except Exception:
+            # The notification was already delivered. Never let an unexpected AI
+            # provider failure make the batch retry it or stop later notifications.
+            log.exception("unexpected automatic bid generation failure for project %s", project.id)
+            return
+
+        try:
+            await self._bot.send_message(
+                chat_id=self._settings.telegram_chat_id,
+                text=bid_text,
+                reply_to_message_id=reply_to,
+                reply_markup=keyboards.regen_bid_keyboard(project.id),
+                parse_mode=None,
+            )
+        except TelegramAPIError:
+            # Sending the project itself succeeded, so a failed optional reply must
+            # not make the notifier resend the project on the next poll.
+            log.exception("failed to send automatic bid for project %s", project.id)

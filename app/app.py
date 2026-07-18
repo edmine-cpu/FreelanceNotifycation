@@ -50,9 +50,8 @@ async def run(settings: Settings) -> None:
             rates_provider=rates_provider,
         )
         # Primary check is fail-open and runs on every new project inside a tick,
-        # so it must not block: give it its own client with minimal retries
-        # instead of the bid generator's full backoff. The secondary pass keeps
-        # full retries — it's user-triggered and wants to succeed.
+        # so it must not block: give it its own client with minimal retries.
+        # Bid generation keeps full retries for both automatic and manual bids.
         screen_client = GeminiClient(
             api_key=settings.gemini_api_key.get_secret_value(),
             model=settings.gemini_model,
@@ -71,7 +70,14 @@ async def run(settings: Settings) -> None:
         source,
         prompt_examples_path=prompt_examples_path,
     )
-    notifier = NotifierLoop(bot, store, source, settings, screener=screener)
+    notifier = NotifierLoop(
+        bot,
+        store,
+        source,
+        settings,
+        screener=screener,
+        bid_generator=bid_generator,
+    )
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
