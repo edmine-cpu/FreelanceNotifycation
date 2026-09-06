@@ -1,12 +1,13 @@
 import asyncio
 import logging
 import time
+from dataclasses import replace
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 
 from app.ai import BidGenerationError, BidGenerator, OrderScreener
-from app.config import Settings
+from app.config import Settings, build_category, parse_skill_ids
 from app.llm import QuotaExceededError
 from app.projects import Project
 from app.source import FreelancehuntSource
@@ -92,8 +93,17 @@ class NotifierLoop:
             time.monotonic() - started, len(passed), len(projects),
         )
 
-    async def _tick(self) -> None:
-        projects = await self._source.fetch_projects()
+    async def _tick(
+        self,
+        projects: list[Project] | None = None,
+        fetched_skill_ids: set[int] | None = None,
+    ) -> None:
+        if projects is None:
+            projects = await self._source.fetch_projects()
+        # An empty successful response still initializes the subscription, so
+        # its first future order is delivered. Failed requests never seed it.
+        for skill_id in (fetched_skill_ids or set()) - {p.skill_id for p in projects}:
+            await self._store.update_last_published_ts(skill_id, 0)
         if not projects:
             return
 
@@ -102,20 +112,30 @@ class NotifierLoop:
         muted_skill_ids = await self._store.muted_skill_ids()
 
         new_projects: list[Project] = []
+        first_seen: list[tuple[int, list[Project]]] = []
+        muted_groups: list[tuple[int, list[Project]]] = []
         for skill_id, group in by_category.items():
             if skill_id in muted_skill_ids:
-                await self._skip_muted_category(skill_id, group)
+                muted_groups.append((skill_id, group))
                 continue
             if not self._store.has_watermark(skill_id):
-                await self._init_category(skill_id, group)
+                first_seen.append((skill_id, group))
                 continue
             watermark = self._store.last_published_ts(skill_id)
             for p in group:
                 # published_ts == 0 means the date failed to parse; fall back to
                 # the is_seen guard so such projects are still announced once.
-                is_new = p.published_ts > watermark or p.published_ts == 0
+                is_new = p.published_ts >= watermark or p.published_ts == 0
                 if is_new and not await self._store.is_seen(p.id):
                     new_projects.append(p)
+
+        pending_ids = {project.id for project in new_projects}
+        if self._settings.send_existing_on_first_run:
+            pending_ids.update(project.id for _, group in first_seen for project in group)
+        for skill_id, group in muted_groups:
+            await self._skip_muted_category(skill_id, group, exclude_ids=pending_ids)
+        for skill_id, group in first_seen:
+            await self._init_category(skill_id, group, exclude_ids=pending_ids)
 
         new_projects = _dedupe_by_id(new_projects)
         if not new_projects:
@@ -126,35 +146,65 @@ class NotifierLoop:
         processed = await self._send_batch(new_projects)
         await self._advance_watermarks(processed)
 
-    async def _init_category(self, skill_id: int, group: list[Project]) -> None:
+    async def _init_category(
+        self, skill_id: int, group: list[Project], exclude_ids: set[str] | None = None
+    ) -> None:
         """Handle the first tick that ever sees a category: suppress (or, if
         configured, send) its current backlog, then record its watermark so
         later ticks only pick up genuinely new projects."""
         if self._settings.send_existing_on_first_run:
             log.info("first sight of skill %d: sending %d existing projects", skill_id, len(group))
-            await self._send_batch(sorted(group, key=lambda p: p.published_ts))
+            processed = await self._send_batch(sorted(group, key=lambda p: p.published_ts))
+            await self._advance_watermarks(processed)
+            return
         else:
             log.info("first sight of skill %d: suppressing %d existing projects", skill_id, len(group))
-        await self._store.mark_seen([p.id for p in group])
+        maximum_ts = max(p.published_ts for p in group)
+        await self._store.mark_seen([
+            p.id for p in group
+            if p.published_ts in (0, maximum_ts) and p.id not in (exclude_ids or set())
+        ])
         await self._store.update_last_published_ts(
-            skill_id, max(p.published_ts for p in group)
+            skill_id, maximum_ts
         )
 
-    async def _skip_muted_category(self, skill_id: int, group: list[Project]) -> None:
+    async def _skip_muted_category(
+        self, skill_id: int, group: list[Project], exclude_ids: set[str] | None = None
+    ) -> None:
         """Keep muted categories up to date without sending notifications."""
         if not group:
             return
         log.info("skill %d is muted: suppressing %d fetched projects", skill_id, len(group))
-        await self._store.mark_seen([p.id for p in group])
+        maximum_ts = max(p.published_ts for p in group)
+        await self._store.mark_seen([
+            p.id for p in group
+            if p.published_ts in (0, maximum_ts) and p.id not in (exclude_ids or set())
+        ])
         await self._store.update_last_published_ts(
-            skill_id, max(p.published_ts for p in group)
+            skill_id, maximum_ts
         )
 
     async def _advance_watermarks(self, sent: list[Project]) -> None:
+        subscribed = await self._store.skill_ids(parse_skill_ids(self._settings.skill_ids))
         for skill_id, group in _group_by_skill(sent).items():
+            if skill_id not in subscribed:
+                continue
             await self._store.update_last_published_ts(
                 skill_id, max(p.published_ts for p in group)
             )
+
+    async def _current_delivery_project(self, project: Project) -> Project | None:
+        """Recheck preferences after each potentially slow operation."""
+        subscribed = await self._store.skill_ids(parse_skill_ids(self._settings.skill_ids))
+        if project.skill_id not in subscribed:
+            return None
+        if project.skill_id in await self._store.muted_skill_ids():
+            # Suppress this category's backlog without marking a shared project
+            # seen for any other category that is still enabled.
+            await self._store.update_last_published_ts(project.skill_id, project.published_ts)
+            return None
+        names = await self._store.category_names()
+        return replace(project, category_name=build_category(project.skill_id, names).name)
 
     async def _send_batch(self, projects: list[Project]) -> list[Project]:
         # "processed" = projects we're done with this tick, either notified or
@@ -165,7 +215,21 @@ class NotifierLoop:
         # Passed the primary check AND notified — feeds the filtered (📂) view.
         notified: list[Project] = []
         for project in projects:
-            if not await self._passes_primary_check(project):
+            if not await self._store.is_active():
+                break
+            project = await self._current_delivery_project(project)
+            if project is None:
+                continue
+            if await self._store.is_seen(project.id):
+                processed.append(project)
+                continue
+            allowed = await self._passes_primary_check(project)
+            if not await self._store.is_active():
+                break
+            project = await self._current_delivery_project(project)
+            if project is None:
+                continue
+            if not allowed:
                 processed.append(project)
                 continue
             if not await self._send_project(project):
@@ -202,6 +266,10 @@ class NotifierLoop:
                 text=text,
                 reply_markup=keyboards.notification_keyboard(project.id),
             )
+        except TelegramForbiddenError:
+            await self._store.set_active(False)
+            log.info("disabled notifications for blocked chat %s", self._settings.telegram_chat_id)
+            return False
         except TelegramAPIError:
             log.exception("failed to send project %s", project.id)
             return False
@@ -228,6 +296,8 @@ class NotifierLoop:
             log.exception("unexpected automatic bid generation failure for project %s", project.id)
             return
 
+        if not await self._store.is_active() or await self._current_delivery_project(project) is None:
+            return
         try:
             await self._bot.send_message(
                 chat_id=self._settings.telegram_chat_id,

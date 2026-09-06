@@ -18,6 +18,13 @@ CALLBACK_PROMPT_JSON = "settings:prompt_json"
 CALLBACK_PROMPT_EDIT = "settings:prompt_edit"
 CALLBACK_NOTIFICATIONS = "settings:notifications"
 CALLBACK_TOGGLE_MUTE_PREFIX = "settings:toggle_mute:"
+CALLBACK_REMOVE_CATEGORIES = "settings:remove_categories"
+CALLBACK_REMOVE_CATEGORY_PREFIX = "settings:remove_category:"
+CALLBACK_PROFILE = "settings:profile"
+CALLBACK_PROFILE_NAME = "settings:profile_name"
+CALLBACK_PROFILE_PORTFOLIO = "settings:profile_portfolio"
+CALLBACK_SYSTEM_PROMPT = "settings:system_prompt"
+CALLBACK_SYSTEM_PROMPT_EDIT = "settings:system_prompt_edit"
 
 # Filter key used in `list:<filter>:<page>` callbacks to mean "every category".
 LIST_FILTER_ALL = "all"
@@ -63,7 +70,10 @@ def settings_keyboard() -> InlineKeyboardMarkup:
         inline_keyboard=[
             [InlineKeyboardButton(text="➕ Добавить новую категорию по ID", callback_data=CALLBACK_ADD_CATEGORY)],
             [InlineKeyboardButton(text="🏷️ Имена категорий", callback_data=CALLBACK_CATEGORY_NAMES)],
-            [InlineKeyboardButton(text="📝 Изменить промт", callback_data=CALLBACK_PROMPT_JSON)],
+            [InlineKeyboardButton(text="➖ Удалить категорию", callback_data=CALLBACK_REMOVE_CATEGORIES)],
+            [InlineKeyboardButton(text="👤 Моё имя и портфолио", callback_data=CALLBACK_PROFILE)],
+            [InlineKeyboardButton(text="📝 Мой промпт", callback_data=CALLBACK_SYSTEM_PROMPT)],
+            [InlineKeyboardButton(text="📑 Примеры откликов (JSON)", callback_data=CALLBACK_PROMPT_JSON)],
             [InlineKeyboardButton(text="🔔 Уведомления категорий", callback_data=CALLBACK_NOTIFICATIONS)],
             [InlineKeyboardButton(text="🏠 В меню", callback_data=CALLBACK_START)],
         ]
@@ -113,6 +123,33 @@ def category_names_back_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="⬅️ Имена категорий", callback_data=CALLBACK_CATEGORY_NAMES)]
         ]
     )
+
+
+def remove_categories_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(
+            text=f"➖ {_truncate(category.name)}",
+            callback_data=f"{CALLBACK_REMOVE_CATEGORY_PREFIX}{category.skill_id}",
+        )]
+        for category in categories
+    ]
+    rows.append([InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def profile_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Моё имя", callback_data=CALLBACK_PROFILE_NAME)],
+        [InlineKeyboardButton(text="🔗 Моё портфолио", callback_data=CALLBACK_PROFILE_PORTFOLIO)],
+        [InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)],
+    ])
+
+
+def system_prompt_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить мой промпт", callback_data=CALLBACK_SYSTEM_PROMPT_EDIT)],
+        [InlineKeyboardButton(text="⬅️ Настройки", callback_data=CALLBACK_SETTINGS)],
+    ])
 
 
 def prompt_json_keyboard() -> InlineKeyboardMarkup:

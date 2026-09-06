@@ -37,6 +37,8 @@ class StateStore:
         self._skill_ids: list[int] | None = None
         self._muted_skill_ids: list[int] = []
         self._category_names: dict[int, str] = {}
+        self._profile: dict[str, str] = {"name": "", "portfolio_url": ""}
+        self._active = True
         self._load_sync()
 
     def _load_sync(self) -> None:
@@ -58,11 +60,16 @@ class StateStore:
         # (guarded further by seen_ids) instead of being re-announced.
         raw_skill_ids = data.get("skill_ids")
         if isinstance(raw_skill_ids, list):
-            skill_ids = _dedupe_ints(raw_skill_ids)
-            if skill_ids:
-                self._skill_ids = skill_ids
+            self._skill_ids = _dedupe_ints(raw_skill_ids)
         self._muted_skill_ids = _dedupe_ints(data.get("muted_skill_ids", []))
         self._category_names = _clean_category_names(data.get("category_names", {}))
+        raw_profile = data.get("profile", {})
+        if isinstance(raw_profile, dict):
+            self._profile = {
+                key: value.strip() if isinstance(value := raw_profile.get(key), str) else ""
+                for key in ("name", "portfolio_url")
+            }
+        self._active = data.get("active", True) is not False
         self._apply_category_names_to_projects()
 
     async def _persist_locked(self) -> None:
@@ -75,6 +82,8 @@ class StateStore:
             "skill_ids": self._skill_ids,
             "muted_skill_ids": self._muted_skill_ids,
             "category_names": self._category_names,
+            "profile": self._profile,
+            "active": self._active,
         }
         tmp = self._path.with_suffix(".tmp")
         async with aiofiles.open(tmp, "w", encoding="utf-8") as f:
@@ -141,6 +150,8 @@ class StateStore:
 
     async def add_skill_id(self, skill_id: int, fallback: list[int]) -> bool:
         """Persist a watched skill id. Returns False when it already exists."""
+        if skill_id <= 0:
+            raise ValueError("skill_id must be positive")
         async with self._lock:
             current = list(self._skill_ids if self._skill_ids is not None else fallback)
             if skill_id in current:
@@ -149,6 +160,45 @@ class StateStore:
             self._skill_ids = current
             await self._persist_locked()
             return True
+
+    async def remove_skill_id(self, skill_id: int, fallback: list[int]) -> bool:
+        """Stop watching a category, including when it is the last category."""
+        async with self._lock:
+            current = list(self._skill_ids if self._skill_ids is not None else fallback)
+            if skill_id not in current:
+                return False
+            self._skill_ids = [value for value in current if value != skill_id]
+            self._muted_skill_ids = [value for value in self._muted_skill_ids if value != skill_id]
+            self._category_names.pop(skill_id, None)
+            self._watermarks.pop(str(skill_id), None)
+            self._projects = [project for project in self._projects if project.skill_id != skill_id]
+            await self._persist_locked()
+            return True
+
+    async def profile(self) -> dict[str, str]:
+        async with self._lock:
+            return dict(self._profile)
+
+    async def set_profile(
+        self, name: str | None = None, portfolio_url: str | None = None
+    ) -> None:
+        async with self._lock:
+            if name is not None:
+                self._profile["name"] = name.strip()
+            if portfolio_url is not None:
+                self._profile["portfolio_url"] = portfolio_url.strip()
+            await self._persist_locked()
+
+    async def set_active(self, active: bool) -> None:
+        async with self._lock:
+            if self._active == active and self._path.exists():
+                return
+            self._active = active
+            await self._persist_locked()
+
+    async def is_active(self) -> bool:
+        async with self._lock:
+            return self._active
 
     async def category_names(self, fallback: dict[int, str] | None = None) -> dict[int, str]:
         async with self._lock:
@@ -203,14 +253,17 @@ class StateStore:
 
     async def recent_projects(self) -> list[Project]:
         async with self._lock:
-            return list(self._projects)
+            return [project for project in self._projects if self._watches(project.skill_id)]
 
     async def find_project(self, project_id: str) -> Project | None:
         async with self._lock:
             for p in self._projects:
-                if p.id == project_id:
+                if p.id == project_id and self._watches(p.skill_id):
                     return p
             return None
+
+    def _watches(self, skill_id: int) -> bool:
+        return self._skill_ids is None or skill_id in self._skill_ids
 
     async def update_last_published_ts(self, skill_id: int, ts: int) -> None:
         key = str(skill_id)

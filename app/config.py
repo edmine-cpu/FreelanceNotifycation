@@ -56,7 +56,8 @@ class Settings(BaseSettings):
     )
 
     telegram_bot_token: SecretStr
-    telegram_chat_id: str
+    # Optional legacy owner's private chat, used only for one-time migration.
+    telegram_chat_id: str = ""
     freelancehunt_token: SecretStr
 
     # Comma-separated list of FreelanceHunt skill IDs to watch, e.g. "99,180".
@@ -85,6 +86,8 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.1-pro-preview"
     gemini_enabled: bool = True
     gemini_timeout_sec: float = 20.0
+    # The legacy owner's stack filter must never hide orders from new users.
+    primary_filter_enabled: bool = False
 
     @field_validator("skill_ids")
     @classmethod

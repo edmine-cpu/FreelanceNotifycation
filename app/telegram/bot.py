@@ -1,15 +1,17 @@
-from pathlib import Path
+from collections.abc import Callable
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 
 from app.config import Settings
 from app.ai import BidGenerator
 from app.source import FreelancehuntSource
-from app.storage import StateStore
+from app.storage.users import UserContext, UserRegistry
 
 from .handlers import callbacks, commands
+from .user_context import UserContextMiddleware
 
 
 def build_bot(token: str) -> Bot:
@@ -21,17 +23,15 @@ def build_bot(token: str) -> Bot:
 
 def build_dispatcher(
     settings: Settings,
-    store: StateStore,
-    bid_generator: BidGenerator | None,
+    registry: UserRegistry,
+    generator_factory: Callable[[UserContext], BidGenerator | None],
     source: FreelancehuntSource,
-    prompt_examples_path: Path,
 ) -> Dispatcher:
-    dp = Dispatcher()
-    dp["settings"] = settings
-    dp["store"] = store
-    dp["bid_generator"] = bid_generator
+    dp = Dispatcher(events_isolation=SimpleEventIsolation())
     dp["source"] = source
-    dp["prompt_examples_path"] = prompt_examples_path
+    middleware = UserContextMiddleware(registry, generator_factory)
+    dp.message.outer_middleware(middleware)
+    dp.callback_query.outer_middleware(middleware)
     dp.include_router(commands.router)
     dp.include_router(callbacks.router)
     return dp

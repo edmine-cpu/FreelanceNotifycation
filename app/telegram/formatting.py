@@ -5,6 +5,17 @@ from app.projects import Project
 MAX_DESC = 300
 
 
+def _category_label(value: str) -> str:
+    """Keep menu summaries within Telegram's UTF-16 text budget."""
+    value = value or "пока не выбраны"
+    size = 0
+    for index, char in enumerate(value):
+        size += 2 if ord(char) > 0xFFFF else 1
+        if size > 1500:
+            return value[:index].rstrip() + "…"
+    return value
+
+
 def format_project_notification(project: Project) -> str:
     parts = [f'🆕 <a href="{html.escape(project.url, quote=True)}"><b>{html.escape(project.title)}</b></a>']
 
@@ -35,21 +46,50 @@ def format_project_notification(project: Project) -> str:
 
 def format_start_menu(category_label: str) -> str:
     return (
-        f"Привет! Это бот для категорий <b>{html.escape(category_label)}</b> на FreelanceHunt.\n\n"
-        "Я раз в минуту проверяю новые проекты и присылаю уведомления.\n"
-        "Можешь посмотреть последние из истории кнопкой ниже."
+        "Привет! Я помогу следить за проектами на Freelancehunt и готовить отклики.\n\n"
+        f"Твои категории: <b>{html.escape(_category_label(category_label))}</b>.\n\n"
+        "Открой ⚙️ Настройки: добавь категории по ID, укажи своё имя и ссылку на портфолио. "
+        "Там же можно задать названия категорий, уведомления и свой промпт для ИИ. "
+        "Все эти настройки действуют только для тебя.\n\n"
+        "📂 — проекты из истории; 🔴 — все проекты категории.\n"
+        "/settings — настройки · /cancel — отменить ввод\n"
+        "/stop — остановить уведомления · /start — возобновить"
     )
 
 
-def format_settings_menu(category_label: str, muted_count: int) -> str:
+def format_settings_menu(category_label: str, muted_count: int, profile: dict | None = None) -> str:
     muted_line = f"\nОтключено уведомлений: <b>{muted_count}</b>" if muted_count else ""
-    return f"<b>Настройки:</b>\n\nКатегории: {html.escape(category_label)}{muted_line}"
+    profile = profile or {}
+    return (
+        "<b>Мои настройки</b>\n\nВсе изменения действуют только для тебя.\n\n"
+        f"Категории: {html.escape(_category_label(category_label))}{muted_line}\n"
+        f"Имя: {html.escape(profile.get('name') or 'не указано')}\n"
+        f"Портфолио: {html.escape(profile.get('portfolio_url') or 'не указано')}"
+    )
+
+
+def format_profile(profile: dict) -> str:
+    return (
+        "<b>Моё имя и портфолио</b>\n\n"
+        f"Имя: {html.escape(profile.get('name') or 'не указано')}\n"
+        f"Портфолио: {html.escape(profile.get('portfolio_url') or 'не указано')}\n\n"
+        "ИИ использует эти данные только в твоих откликах. "
+        "Выбери, что изменить. Для очистки поля отправь «-»."
+    )
+
+
+def format_remove_categories(category_label: str) -> str:
+    return (
+        "<b>Удалить категорию</b>\n\n"
+        f"Твои категории: {html.escape(_category_label(category_label))}.\n"
+        "Нажми на категорию, чтобы убрать её из своей подписки."
+    )
 
 
 def format_category_notifications(category_label: str) -> str:
     return (
         "<b>Уведомления категорий</b>\n\n"
-        f"Категории: {html.escape(category_label)}\n"
+        f"Категории: {html.escape(_category_label(category_label))}\n"
         "Нажми на категорию, чтобы включить или отключить уведомления."
     )
 
@@ -57,7 +97,7 @@ def format_category_notifications(category_label: str) -> str:
 def format_category_names(category_label: str) -> str:
     return (
         "<b>Имена категорий</b>\n\n"
-        f"Категории: {html.escape(category_label)}\n"
+        f"Категории: {html.escape(_category_label(category_label))}\n"
         "Нажми на категорию, чтобы задать или изменить имя."
     )
 
@@ -65,7 +105,9 @@ def format_category_names(category_label: str) -> str:
 def format_add_category_prompt() -> str:
     return (
         "<b>Добавить новую категорию</b>\n\n"
-        "Отправь ID категории FreelanceHunt одним сообщением."
+        "Отправь ID категории Freelancehunt одним сообщением. "
+        "Например: 180 — разработка ботов, 99 — веб-программирование.\n"
+        "Можно добавить до 30 категорий. /cancel — отменить ввод."
     )
 
 
@@ -80,8 +122,9 @@ def format_category_name_prompt(skill_id: int, current_name: str) -> str:
 
 def format_prompt_edit_prompt() -> str:
     return (
-        "<b>Изменить промт</b>\n\n"
-        "Отправь новый JSON целиком одним сообщением."
+        "<b>Мои примеры откликов (JSON)</b>\n\n"
+        "Отправь новый JSON целиком одним сообщением. "
+        "Изменятся только твои примеры. /cancel — отменить ввод."
     )
 
 
@@ -91,13 +134,13 @@ def format_settings_notice(text: str) -> str:
 
 def format_projects_page_header(category_label: str, page: int, total_pages: int, total: int) -> str:
     return (
-        f"<b>Последние проекты</b> — {html.escape(category_label)}\n"
+        f"<b>Последние проекты</b> — {html.escape(_category_label(category_label))}\n"
         f"Всего: {total} · страница {page + 1}/{max(total_pages, 1)}"
     )
 
 
 def format_empty_history(category_label: str) -> str:
     return (
-        f"Пока в истории нет проектов из категорий <b>{html.escape(category_label)}</b>.\n"
+        f"Пока в истории нет проектов из категорий <b>{html.escape(_category_label(category_label))}</b>.\n"
         "Подожди до следующей проверки — и они появятся здесь."
     )

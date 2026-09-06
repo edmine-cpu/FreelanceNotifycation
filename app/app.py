@@ -5,38 +5,27 @@ import signal
 from app.config import Settings
 from app.ai import BidGenerator, GeminiClient, OrderScreener
 from app.ai.pricing import AtomicQuoteStore
-from app.ai.prompt_store import ensure_prompt_json
-from app.notifier import NotifierLoop
+from app.notifier.public import PublicNotifier
 from app.rates import RatesProvider
 from app.source import FreelancehuntSource
-from app.storage import StateStore
+from app.storage.users import UserContext, UserRegistry
 from app.telegram import build_bot, build_dispatcher
 
 log = logging.getLogger(__name__)
 
 
 async def run(settings: Settings) -> None:
-    store = StateStore(settings.state_file, history_size=settings.history_size)
-    skill_ids = await store.skill_ids([category.skill_id for category in settings.categories])
-    settings.skill_ids = ",".join(str(skill_id) for skill_id in skill_ids)
-    settings.category_names = await store.category_names(settings.category_names)
-    prompt_examples_path = settings.prompt_examples_file or settings.state_file.with_name(
-        "bids_examples.json"
-    )
-    ensure_prompt_json(prompt_examples_path)
-    categories = settings.categories
-    log.info(
-        "watching %d categories: %s",
-        len(categories),
-        ", ".join(f"{c.name} (skill {c.skill_id})" for c in categories),
-    )
+    registry = UserRegistry(settings)
+    await registry.migrate_legacy()
+    log.info("public mode: %d registered users", len(await registry.users()))
     bot = build_bot(settings.telegram_bot_token.get_secret_value())
     source = FreelancehuntSource(
         token=settings.freelancehunt_token.get_secret_value(),
-        categories=categories,
+        categories=[],
     )
 
-    bid_generator: BidGenerator | None = None
+    generators: dict[int, BidGenerator] = {}
+    gemini: GeminiClient | None = None
     screener: OrderScreener | None = None
     if settings.ai_active:
         gemini = GeminiClient(
@@ -45,12 +34,6 @@ async def run(settings: Settings) -> None:
             timeout=settings.gemini_timeout_sec,
         )
         rates_provider = RatesProvider(fallback=settings.fallback_rates)
-        bid_generator = BidGenerator(
-            gemini,
-            examples_path=prompt_examples_path,
-            rates_provider=rates_provider,
-            quote_store=AtomicQuoteStore(settings.quote_file),
-        )
         # Primary check is fail-open and runs on every new project inside a tick,
         # so it must not block: give it its own client with minimal retries.
         # Bid generation keeps full retries for both automatic and manual bids.
@@ -65,21 +48,22 @@ async def run(settings: Settings) -> None:
     else:
         log.info("ai disabled (no API key or GEMINI_ENABLED=false)")
 
-    dispatcher = build_dispatcher(
-        settings,
-        store,
-        bid_generator,
-        source,
-        prompt_examples_path=prompt_examples_path,
-    )
-    notifier = NotifierLoop(
-        bot,
-        store,
-        source,
-        settings,
-        screener=screener,
-        bid_generator=bid_generator,
-    )
+    def generator_for(user: UserContext) -> BidGenerator | None:
+        if gemini is None:
+            return None
+        if user.user_id not in generators:
+            generators[user.user_id] = BidGenerator(
+                gemini,
+                examples_path=user.prompt_examples_path,
+                system_prompt_path=user.system_prompt_path,
+                profile_provider=user.store.profile,
+                rates_provider=rates_provider,
+                quote_store=AtomicQuoteStore(user.quote_path),
+            )
+        return generators[user.user_id]
+
+    dispatcher = build_dispatcher(settings, registry, generator_for, source)
+    notifier = PublicNotifier(bot, registry, source, settings, generator_for, screener)
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
@@ -90,9 +74,14 @@ async def run(settings: Settings) -> None:
     )
     notifier_task = asyncio.create_task(notifier.run(stop_event), name="notifier")
 
-    await stop_event.wait()
+    stop_task = asyncio.create_task(stop_event.wait(), name="shutdown-wait")
+    done, _ = await asyncio.wait(
+        (polling_task, notifier_task, stop_task), return_when=asyncio.FIRST_COMPLETED
+    )
+    stop_event.set()
     log.info("shutdown requested")
-    await dispatcher.stop_polling()
+    if not polling_task.done():
+        await dispatcher.stop_polling()
 
     for task in (polling_task, notifier_task):
         try:
@@ -102,8 +91,14 @@ async def run(settings: Settings) -> None:
         except Exception:
             log.exception("task %s exited with error", task.get_name())
 
+    await asyncio.gather(polling_task, notifier_task, return_exceptions=True)
+    stop_task.cancel()
+
     await source.aclose()
     await bot.session.close()
+    # Let Docker restart the service if either critical loop stopped by itself.
+    if stop_task not in done:
+        raise RuntimeError("a bot service task stopped unexpectedly")
 
 
 def _install_signal_handlers(stop_event: asyncio.Event) -> None:

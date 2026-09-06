@@ -28,6 +28,8 @@ class FreelancehuntSource:
     ) -> None:
         self._categories = categories
         self._page_size = page_size
+        self.successful_skill_ids: set[int] = set()
+        self._request_slots = asyncio.Semaphore(5)
         self._client = httpx.AsyncClient(
             base_url=API_BASE,
             timeout=timeout,
@@ -51,6 +53,7 @@ class FreelancehuntSource:
             return_exceptions=True,
         )
         projects: list[Project] = []
+        self.successful_skill_ids = set()
         for category, result in zip(categories, results):
             if isinstance(result, Exception):
                 log.error(
@@ -58,6 +61,7 @@ class FreelancehuntSource:
                     category.name, category.skill_id, result,
                 )
                 continue
+            self.successful_skill_ids.add(category.skill_id)
             projects.extend(result)
         return projects
 
@@ -66,7 +70,10 @@ class FreelancehuntSource:
         /start menu's unfiltered (🔴) view for a live, on-demand refresh."""
         category = next((c for c in self._categories if c.skill_id == skill_id), None)
         if category is None:
-            return []
+            # User callbacks validate membership. A just-added category may not
+            # be in the polling union until the next tick.
+            from app.config import build_category
+            category = build_category(skill_id)
         return await self._fetch_category(category)
 
     async def _fetch_category(self, category: Category) -> list[Project]:
@@ -74,7 +81,8 @@ class FreelancehuntSource:
             "filter[skill_id]": category.skill_id,
             "page[size]": self._page_size,
         }
-        resp = await self._client.get("/projects", params=params)
+        async with self._request_slots:
+            resp = await self._client.get("/projects", params=params)
         if resp.status_code >= 400:
             raise RuntimeError(f"FreelanceHunt API {resp.status_code}: {resp.text[:200]}")
         data = resp.json().get("data", [])

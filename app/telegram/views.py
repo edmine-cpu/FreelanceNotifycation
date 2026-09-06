@@ -13,9 +13,15 @@ def start_view(settings: Settings) -> tuple[str, InlineKeyboardMarkup]:
     )
 
 
-def settings_view(settings: Settings, muted_skill_ids: set[int]) -> tuple[str, InlineKeyboardMarkup]:
+def settings_view(
+    settings: Settings, muted_skill_ids: set[int], profile: dict | None = None,
+) -> tuple[str, InlineKeyboardMarkup]:
     return (
-        formatting.format_settings_menu(settings.category_label, len(muted_skill_ids)),
+        formatting.format_settings_menu(
+            settings.category_label,
+            len(muted_skill_ids & {category.skill_id for category in settings.categories}),
+            profile,
+        ),
         keyboards.settings_keyboard(),
     )
 
@@ -47,7 +53,8 @@ def projects_page_view(
     unfiltered: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup]:
     label = _filter_label(settings, filter_key, unfiltered)
-    filtered = _filter_projects(projects, filter_key)
+    allowed_ids = {category.skill_id for category in settings.categories}
+    filtered = _filter_projects([p for p in projects if p.skill_id in allowed_ids], filter_key)
     # Filtered (📂) view: keep only orders that passed the primary check.
     # Unfiltered (🔴) view: show everything as-is.
     if not unfiltered and passed_ids is not None:
@@ -75,7 +82,7 @@ def _filter_projects(projects: list[Project], filter_key: str) -> list[Project]:
     try:
         skill_id = int(filter_key)
     except ValueError:
-        return projects
+        return []
     return [p for p in projects if p.skill_id == skill_id]
 
 

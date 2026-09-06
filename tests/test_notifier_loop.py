@@ -30,9 +30,14 @@ def _notifier(*, bid_generator: Mock) -> tuple[NotifierLoop, AsyncMock]:
     bot.send_message.return_value = SimpleNamespace(message_id=777)
     notifier = NotifierLoop(
         bot,
+        Mock(
+            is_active=AsyncMock(return_value=True),
+            skill_ids=AsyncMock(return_value=[180]),
+            muted_skill_ids=AsyncMock(return_value=set()),
+            category_names=AsyncMock(return_value={}),
+        ),
         Mock(),
-        Mock(),
-        SimpleNamespace(telegram_chat_id="123456"),
+        SimpleNamespace(telegram_chat_id="123456", skill_ids="180"),
         bid_generator=bid_generator,
     )
     return notifier, bot

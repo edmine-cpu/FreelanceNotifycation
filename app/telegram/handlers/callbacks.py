@@ -1,5 +1,10 @@
 import logging
+import os
+import re
+import tempfile
+from dataclasses import replace
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
@@ -27,14 +32,19 @@ router = Router(name="callbacks")
 log = logging.getLogger(__name__)
 
 _QUOTA_NOTICE = "Лимит запросов к ИИ исчерпан. Попробуйте позже."
-_TELEGRAM_TEXT_LIMIT = 4096
 _MAX_CATEGORY_NAME_LENGTH = 80
+_MAX_CATEGORIES = 30
+_MAX_SKILL_ID = 2147483647
+_MAX_PROMPT_LENGTH = 3500
 
 
 class SettingsFlow(StatesGroup):
     awaiting_category_id = State()
     awaiting_category_name = State()
     awaiting_prompt_json = State()
+    awaiting_system_prompt = State()
+    awaiting_profile_name = State()
+    awaiting_profile_portfolio = State()
 
 
 @router.callback_query(F.data == keyboards.CALLBACK_NOOP)
@@ -54,6 +64,8 @@ async def handle_hide(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.callback_query(F.data == keyboards.CALLBACK_START)
 async def handle_start_menu(callback: CallbackQuery, settings: Settings, state: FSMContext) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
     await state.clear()
     text, markup = start_view(settings)
     await _safe_edit(callback, text, markup)
@@ -70,7 +82,7 @@ async def handle_settings_menu(
     if not await _ensure_callback_allowed(callback, settings):
         return
     await state.clear()
-    text, markup = settings_view(settings, await store.muted_skill_ids())
+    text, markup = settings_view(settings, await store.muted_skill_ids(), await store.profile())
     await _safe_edit(callback, text, markup)
     await callback.answer()
 
@@ -82,6 +94,9 @@ async def handle_add_category_menu(
     state: FSMContext,
 ) -> None:
     if not await _ensure_callback_allowed(callback, settings):
+        return
+    if len(settings.categories) >= _MAX_CATEGORIES:
+        await callback.answer("Можно добавить до 30 категорий. Сначала удали ненужную.", show_alert=True)
         return
     await state.set_state(SettingsFlow.awaiting_category_id)
     await _remember_menu_message(callback, state)
@@ -109,15 +124,14 @@ async def handle_prompt_json(
         )
         await callback.answer()
         return
-    if len(text) > _TELEGRAM_TEXT_LIMIT:
-        await callback.answer("JSON больше лимита одного сообщения Telegram", show_alert=True)
-        return
     try:
-        await callback.message.answer(
-            text,
-            reply_markup=keyboards.prompt_json_keyboard(),
-            parse_mode=None,
-        )
+        chunks = _telegram_chunks(text, _MAX_PROMPT_LENGTH)
+        for index, chunk in enumerate(chunks):
+            await callback.message.answer(
+                chunk,
+                reply_markup=keyboards.prompt_json_keyboard() if index == len(chunks) - 1 else None,
+                parse_mode=None,
+            )
     except TelegramAPIError:
         log.exception("failed to send prompt JSON")
         await callback.answer("Не удалось отправить JSON", show_alert=True)
@@ -192,6 +206,176 @@ async def handle_notifications_menu(
     await callback.answer()
 
 
+@router.callback_query(F.data == keyboards.CALLBACK_REMOVE_CATEGORIES)
+async def handle_remove_categories_menu(
+    callback: CallbackQuery, settings: Settings, state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.clear()
+    await _safe_edit(
+        callback, formatting.format_remove_categories(settings.category_label),
+        keyboards.remove_categories_keyboard(settings.categories),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith(keyboards.CALLBACK_REMOVE_CATEGORY_PREFIX))
+async def handle_remove_category(
+    callback: CallbackQuery, settings: Settings, store: StateStore, state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    skill_id = _parse_skill_id_suffix(callback.data or "", keyboards.CALLBACK_REMOVE_CATEGORY_PREFIX)
+    if _find_category(settings, skill_id) is None:
+        await callback.answer("Категория не найдена в твоих настройках", show_alert=True)
+        return
+    fallback = parse_skill_ids(settings.skill_ids)
+    await store.remove_skill_id(skill_id, fallback)
+    settings.skill_ids = ",".join(str(item) for item in await store.skill_ids(fallback))
+    await state.clear()
+    await _safe_edit(
+        callback, formatting.format_remove_categories(settings.category_label),
+        keyboards.remove_categories_keyboard(settings.categories),
+    )
+    await callback.answer("Категория удалена из твоей подписки")
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_PROFILE)
+async def handle_profile_menu(
+    callback: CallbackQuery, settings: Settings, store: StateStore, state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.clear()
+    await _safe_edit(callback, formatting.format_profile(await store.profile()), keyboards.profile_keyboard())
+    await callback.answer()
+
+
+@router.callback_query(F.data.in_({keyboards.CALLBACK_PROFILE_NAME, keyboards.CALLBACK_PROFILE_PORTFOLIO}))
+async def handle_profile_edit_menu(
+    callback: CallbackQuery, settings: Settings, state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    is_name = callback.data == keyboards.CALLBACK_PROFILE_NAME
+    await state.set_state(
+        SettingsFlow.awaiting_profile_name if is_name else SettingsFlow.awaiting_profile_portfolio
+    )
+    await _remember_menu_message(callback, state)
+    prompt = (
+        "Отправь своё имя (до 80 символов)."
+        if is_name else "Отправь ссылку на своё портфолио, начиная с https:// или http:// (до 500 символов)."
+    )
+    await _safe_edit(
+        callback, formatting.format_settings_notice(f"{prompt}\n«-» — очистить поле. /cancel — отменить ввод."),
+        keyboards.settings_back_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(SettingsFlow.awaiting_profile_name)
+@router.message(SettingsFlow.awaiting_profile_portfolio)
+async def handle_profile_message(
+    message: Message, settings: Settings, store: StateStore, state: FSMContext,
+) -> None:
+    if not _is_allowed_chat(message.chat.id, settings):
+        return
+    is_name = await state.get_state() == SettingsFlow.awaiting_profile_name.state
+    raw = (message.text or "").strip()
+    try:
+        value = _validate_profile_name(raw) if is_name else _validate_portfolio_url(raw)
+    except ValueError as exc:
+        await _edit_menu_from_state(
+            message, state, formatting.format_settings_notice(str(exc)), keyboards.settings_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+    await store.set_profile(**({"name": value} if is_name else {"portfolio_url": value}))
+    await _delete_user_message(message)
+    await _edit_menu_from_state(
+        message, state, formatting.format_profile(await store.profile()), keyboards.profile_keyboard(),
+    )
+    await state.clear()
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_SYSTEM_PROMPT)
+async def handle_system_prompt(
+    callback: CallbackQuery, settings: Settings, system_prompt_path: Path, state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.clear()
+    try:
+        prompt = system_prompt_path.read_text(encoding="utf-8").strip()
+        chunks = _telegram_chunks("Мой промпт (действует только для меня):\n\n" + prompt, _MAX_PROMPT_LENGTH)
+        for index, chunk in enumerate(chunks):
+            await callback.message.answer(
+                chunk, parse_mode=None,
+                reply_markup=keyboards.system_prompt_keyboard() if index == len(chunks) - 1 else None,
+            )
+    except (OSError, TelegramAPIError):
+        log.exception("failed to show personal prompt")
+        await callback.answer("Не удалось показать промпт. Попробуй позже.", show_alert=True)
+        return
+    await callback.answer()
+
+
+@router.callback_query(F.data == keyboards.CALLBACK_SYSTEM_PROMPT_EDIT)
+async def handle_system_prompt_edit_menu(
+    callback: CallbackQuery, settings: Settings, state: FSMContext,
+) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
+    await state.set_state(SettingsFlow.awaiting_system_prompt)
+    await _remember_menu_message(callback, state)
+    await _safe_edit(
+        callback,
+        formatting.format_settings_notice(
+            "Отправь свой промпт обычным текстом (до 3500 символов). "
+            "Опиши опыт, тон, язык и правила своих откликов. "
+            "Имя и портфолио берутся из твоего профиля. /cancel — отменить ввод."
+        ),
+        keyboards.settings_back_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.message(SettingsFlow.awaiting_system_prompt)
+async def handle_system_prompt_message(
+    message: Message, settings: Settings, bid_generator: BidGenerator | None,
+    system_prompt_path: Path, state: FSMContext,
+) -> None:
+    if not _is_allowed_chat(message.chat.id, settings):
+        return
+    prompt = (message.text or "").strip()
+    if not prompt or _telegram_length(prompt) > _MAX_PROMPT_LENGTH:
+        await _edit_menu_from_state(
+            message, state,
+            formatting.format_settings_notice("Отправь непустой промпт обычным текстом, до 3500 символов."),
+            keyboards.settings_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        return
+    try:
+        _write_personal_prompt(system_prompt_path, prompt)
+        if bid_generator is not None:
+            bid_generator.reload_prompt()
+    except OSError:
+        log.exception("failed to save personal prompt")
+        await _edit_menu_from_state(
+            message, state, formatting.format_settings_notice("Не удалось сохранить промпт. Попробуй ещё раз."),
+            keyboards.settings_back_keyboard(),
+        )
+        return
+    await _delete_user_message(message)
+    await _edit_menu_from_state(
+        message, state, formatting.format_settings_notice("Твой промпт сохранён и будет использован в следующем отклике."),
+        keyboards.system_prompt_keyboard(),
+    )
+    await state.clear()
+
+
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_TOGGLE_MUTE_PREFIX))
 async def handle_toggle_category_notifications(
     callback: CallbackQuery,
@@ -201,8 +385,8 @@ async def handle_toggle_category_notifications(
     if not await _ensure_callback_allowed(callback, settings):
         return
     skill_id = _parse_skill_id_suffix(callback.data or "", keyboards.CALLBACK_TOGGLE_MUTE_PREFIX)
-    if skill_id <= 0:
-        await callback.answer("Некорректная категория", show_alert=True)
+    if _find_category(settings, skill_id) is None:
+        await callback.answer("Категория не найдена в твоих настройках", show_alert=True)
         return
     muted = await store.toggle_muted_skill_id(skill_id)
     text, markup = category_notifications_view(settings, await store.muted_skill_ids())
@@ -215,7 +399,6 @@ async def handle_category_id_message(
     message: Message,
     settings: Settings,
     store: StateStore,
-    source: FreelancehuntSource,
     state: FSMContext,
 ) -> None:
     if not _is_allowed_chat(message.chat.id, settings):
@@ -233,21 +416,29 @@ async def handle_category_id_message(
         )
         await _delete_user_message(message)
         return
-    if skill_id <= 0:
+    if not 0 < skill_id <= _MAX_SKILL_ID:
         await _edit_menu_from_state(
             message,
             state,
-            formatting.format_settings_notice("ID категории должен быть положительным числом."),
+            formatting.format_settings_notice(f"ID категории должен быть числом от 1 до {_MAX_SKILL_ID}."),
             keyboards.settings_back_keyboard(),
         )
         await _delete_user_message(message)
         return
 
     fallback = parse_skill_ids(settings.skill_ids)
+    if skill_id not in fallback and len(fallback) >= _MAX_CATEGORIES:
+        await _edit_menu_from_state(
+            message, state,
+            formatting.format_settings_notice("Можно добавить до 30 категорий. Сначала удали ненужную."),
+            keyboards.settings_back_keyboard(),
+        )
+        await _delete_user_message(message)
+        await state.clear()
+        return
     added = await store.add_skill_id(skill_id, fallback)
     skill_ids = await store.skill_ids(fallback)
     settings.skill_ids = ",".join(str(item) for item in skill_ids)
-    source.set_categories(settings.categories)
     await _delete_user_message(message)
 
     if added:
@@ -265,7 +456,6 @@ async def handle_category_name_message(
     message: Message,
     settings: Settings,
     store: StateStore,
-    source: FreelancehuntSource,
     state: FSMContext,
 ) -> None:
     if not _is_allowed_chat(message.chat.id, settings):
@@ -313,7 +503,6 @@ async def handle_category_name_message(
 
     await store.set_category_name(skill_id, name)
     settings.category_names = await store.category_names(settings.category_names)
-    source.set_categories(settings.categories)
     await _delete_user_message(message)
     text, markup = category_names_view(settings)
     await _edit_menu_from_state(message, state, text, markup)
@@ -360,7 +549,7 @@ async def handle_prompt_json_message(
     await _edit_menu_from_state(
         message,
         state,
-        formatting.format_settings_notice("JSON промта обновлён."),
+        formatting.format_settings_notice("Твои примеры откликов обновлены."),
         keyboards.hide_keyboard(),
     )
     await state.clear()
@@ -368,11 +557,18 @@ async def handle_prompt_json_message(
 
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_LIST_PREFIX))
 async def handle_list_page(callback: CallbackQuery, settings: Settings, store: StateStore) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
     filter_key, page = _parse_list_data(callback.data or "")
+    if filter_key != keyboards.LIST_FILTER_ALL and filter_key not in {
+        str(category.skill_id) for category in settings.categories
+    }:
+        await callback.answer("Категория не найдена в твоих настройках", show_alert=True)
+        return
     projects = await store.recent_projects()
     # With AI off there's no primary check, so nothing is ever marked passed —
     # fall back to showing everything (passed_ids=None disables the filter).
-    passed = await store.passed_ids() if settings.ai_active else None
+    passed = await store.passed_ids() if settings.ai_active and settings.primary_filter_enabled else None
     text, markup = projects_page_view(projects, page, settings, filter_key, passed_ids=passed)
     await _safe_edit(callback, text, markup)
     await callback.answer()
@@ -385,12 +581,22 @@ async def handle_raw_page(
     store: StateStore,
     source: FreelancehuntSource,
 ) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
     skill_id, page = _parse_raw_data(callback.data or "")
+    category = _find_category(settings, skill_id)
+    if category is None:
+        await callback.answer("Категория не найдена в твоих настройках", show_alert=True)
+        return
     # Live, unfiltered view: fetch the category fresh on entry (page 0) and merge
     # new projects into the cache so Show/Generate can find them later. On a
     # fetch error, fall back to the cached history rather than failing the tap.
     try:
         fetched = await source.fetch_category(skill_id)
+        fetched = [
+            replace(project, category_name=category.name, category_url=category.listing_url)
+            for project in fetched if project.skill_id == skill_id
+        ]
         await store.add_projects(fetched)
         projects = fetched
     except Exception:
@@ -404,11 +610,14 @@ async def handle_raw_page(
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_SHOW_PREFIX))
 async def handle_show_project(
     callback: CallbackQuery,
+    settings: Settings,
     store: StateStore,
 ) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
     project_id = (callback.data or "")[len(keyboards.CALLBACK_SHOW_PREFIX):]
     project = await store.find_project(project_id)
-    if project is None:
+    if project is None or _find_category(settings, project.skill_id) is None:
         await callback.answer("Проект не найден в истории", show_alert=True)
         return
 
@@ -428,16 +637,19 @@ async def handle_show_project(
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_GEN_PREFIX))
 async def handle_generate(
     callback: CallbackQuery,
+    settings: Settings,
     store: StateStore,
     bid_generator: BidGenerator | None,
 ) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
     if bid_generator is None:
         await callback.answer("ИИ выключен в настройках", show_alert=True)
         return
 
     project_id = (callback.data or "")[len(keyboards.CALLBACK_GEN_PREFIX):]
     project = await store.find_project(project_id)
-    if project is None:
+    if project is None or _find_category(settings, project.skill_id) is None:
         await callback.answer("Проект не найден в истории", show_alert=True)
         return
 
@@ -466,16 +678,19 @@ async def handle_generate(
 @router.callback_query(F.data.startswith(keyboards.CALLBACK_REGEN_PREFIX))
 async def handle_regen(
     callback: CallbackQuery,
+    settings: Settings,
     store: StateStore,
     bid_generator: BidGenerator | None,
 ) -> None:
+    if not await _ensure_callback_allowed(callback, settings):
+        return
     if bid_generator is None:
         await callback.answer("ИИ выключен в настройках", show_alert=True)
         return
 
     project_id = (callback.data or "")[len(keyboards.CALLBACK_REGEN_PREFIX):]
     project = await store.find_project(project_id)
-    if project is None:
+    if project is None or _find_category(settings, project.skill_id) is None:
         await callback.answer("Проект не найден в истории", show_alert=True)
         return
 
@@ -526,7 +741,11 @@ async def _send_settings_flow_message(
 
 
 async def _ensure_callback_allowed(callback: CallbackQuery, settings: Settings) -> bool:
-    if _is_allowed_chat(callback.message.chat.id, settings):
+    if (
+        callback.message is not None
+        and _is_allowed_chat(callback.message.chat.id, settings)
+        and _is_allowed_chat(callback.from_user.id, settings)
+    ):
         return True
     await callback.answer("Нет доступа к настройкам", show_alert=True)
     return False
@@ -597,8 +816,11 @@ async def _delete_user_message(message: Message) -> None:
 
 
 def _parse_skill_id_suffix(data: str, prefix: str) -> int:
+    if not data.startswith(prefix):
+        return 0
     try:
-        return int(data[len(prefix):])
+        skill_id = int(data[len(prefix):])
+        return skill_id if 0 < skill_id <= _MAX_SKILL_ID else 0
     except ValueError:
         return 0
 
@@ -635,8 +857,77 @@ def _parse_raw_data(data: str) -> tuple[int, int]:
 
 
 def _find_category(settings: Settings, skill_id: int):
+    if not 0 < skill_id <= _MAX_SKILL_ID:
+        return None
     return next((category for category in settings.categories if category.skill_id == skill_id), None)
 
 
 def _normalize_category_name(raw: str) -> str:
     return " ".join(raw.split())
+
+
+def _validate_profile_name(raw: str) -> str:
+    if raw == "-":
+        return ""
+    value = " ".join(raw.split())
+    if not value or len(value) > 80 or any(ord(char) < 32 for char in value):
+        raise ValueError("Отправь имя от 1 до 80 символов или «-», чтобы очистить поле.")
+    return value
+
+
+def _validate_portfolio_url(raw: str) -> str:
+    if raw == "-":
+        return ""
+    error = "Нужна ссылка http:// или https:// до 500 символов, без логина и пароля. «-» — очистить поле."
+    if not raw or len(raw) > 500 or any(char.isspace() or ord(char) < 32 or char in '<>"\\' for char in raw):
+        raise ValueError(error)
+    try:
+        parsed = urlsplit(raw)
+        if parsed.scheme.lower() not in {"http", "https"} or parsed.username is not None or parsed.password is not None:
+            raise ValueError(error)
+        host = (parsed.hostname or "").encode("idna").decode("ascii")
+        parsed.port  # Reject malformed or out-of-range ports.
+        labels = host.rstrip(".").split(".")
+        if len(host) > 253 or len(labels) < 2 or any(
+            not re.fullmatch(r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", label)
+            for label in labels
+        ):
+            raise ValueError(error)
+    except (ValueError, UnicodeError):
+        raise ValueError(error) from None
+    return raw
+
+
+def _telegram_length(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _telegram_chunks(text: str, limit: int) -> list[str]:
+    chunks: list[str] = []
+    chunk: list[str] = []
+    size = 0
+    for char in text:
+        width = 2 if ord(char) > 0xFFFF else 1
+        if size + width > limit:
+            chunks.append("".join(chunk))
+            chunk = []
+            size = 0
+        chunk.append(char)
+        size += width
+    if chunk:
+        chunks.append("".join(chunk))
+    return chunks
+
+
+def _write_personal_prompt(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_path = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+            file.write(text + "\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
