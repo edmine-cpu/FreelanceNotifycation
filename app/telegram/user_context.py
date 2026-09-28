@@ -9,6 +9,8 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from app.storage.users import UserContext, UserRegistry
+from app.ai.policy import ai_allowed
+from app.ai.store import AIStore
 
 
 class UserContextMiddleware(BaseMiddleware):
@@ -16,7 +18,9 @@ class UserContextMiddleware(BaseMiddleware):
         self,
         registry: UserRegistry,
         generator_factory: Callable[[UserContext], Any],
+        ai_store: AIStore | None = None,
     ) -> None:
+        self._ai_store = ai_store
         self._registry = registry
         self._generator_factory = generator_factory
 
@@ -46,7 +50,14 @@ class UserContextMiddleware(BaseMiddleware):
                 await event.answer("Настройки доступны только в личном чате с ботом.", show_alert=True)
             return None
         context = await self._registry.get(sender.id)
-        generator = self._generator_factory(context)
+        if self._ai_store is not None:
+            keep = isinstance(event, CallbackQuery) and (event.data or "").startswith(("regen:", "ai_skip:", "ai_cancel:", "ai_retry:"))
+            if (isinstance(event, CallbackQuery) and not keep) or (isinstance(event, Message) and (event.text or "").startswith("/")):
+                self._ai_store.cancel_waiting(sender.id)
+                if data.get("state") is not None:
+                    await data["state"].clear()
+                    data["raw_state"] = None
+        generator = self._generator_factory(context) if ai_allowed(sender.id) else None
         if inspect.isawaitable(generator):
             generator = await generator
         data.update(

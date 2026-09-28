@@ -10,14 +10,16 @@ from app.config import Settings
 from app.projects import Project
 from app.storage import StateStore
 from app.telegram import formatting, keyboards
-from app.telegram.handlers import callbacks, commands
+from app.telegram.handlers import callbacks, commands, ai_actions
+from app.ai.policy import AI_OWNER_ID
+from app.ai.store import AIStore
 from app.telegram.views import projects_page_view, start_view
 
 
 def settings_for(user_id: int = 11, skill_ids: str = "180") -> Settings:
     return Settings(
         _env_file=None, telegram_bot_token="token", telegram_chat_id=str(user_id),
-        freelancehunt_token="token", skill_ids=skill_ids, gemini_enabled=False,
+        freelancehunt_token="token", skill_ids=skill_ids, ai_enabled=False,
     )
 
 
@@ -83,7 +85,9 @@ class PersonalValidationTest(unittest.TestCase):
         self.assertIn("пока не выбраны", text)
         self.assertIn("только для тебя", text)
         data = {button.callback_data for row in keyboards.settings_keyboard().inline_keyboard for button in row}
-        self.assertTrue({keyboards.CALLBACK_PROFILE, keyboards.CALLBACK_SYSTEM_PROMPT, keyboards.CALLBACK_PROMPT_JSON} <= data)
+        self.assertIn(keyboards.CALLBACK_PROFILE, data)
+        self.assertNotIn(keyboards.CALLBACK_SYSTEM_PROMPT, data)
+        self.assertNotIn(keyboards.CALLBACK_PROMPT_JSON, data)
 
     def test_all_projects_view_hides_removed_categories(self):
         text, markup = projects_page_view([project_for(180, "own"), project_for(99, "removed")], 0, settings_for())
@@ -145,7 +149,7 @@ class PersonalHandlersTest(unittest.IsolatedAsyncioTestCase):
             generator = Mock()
             state = state_for()
             await callbacks.handle_system_prompt_message(
-                message_for("Пиши кратко и по делу."), settings_for(), generator, path, state,
+                message_for("Пиши кратко и по делу.", AI_OWNER_ID), settings_for(AI_OWNER_ID), generator, path, state,
             )
             self.assertEqual(path.read_text(encoding="utf-8").strip(), "Пиши кратко и по делу.")
             self.assertEqual(other.read_text(encoding="utf-8"), "Other prompt")
@@ -160,7 +164,7 @@ class PersonalHandlersTest(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(length=len(invalid)):
                     generator = Mock()
                     state = state_for()
-                    await callbacks.handle_system_prompt_message(message_for(invalid), settings_for(), generator, path, state)
+                    await callbacks.handle_system_prompt_message(message_for(invalid, AI_OWNER_ID), settings_for(AI_OWNER_ID), generator, path, state)
                     self.assertEqual(path.read_text(encoding="utf-8"), "Original")
                     generator.reload_prompt.assert_not_called()
                     state.clear.assert_not_awaited()
@@ -169,8 +173,8 @@ class PersonalHandlersTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "mine.md"
             path.write_text("<my instructions>" + "😀" * 4000, encoding="utf-8")
-            callback = callback_for(keyboards.CALLBACK_SYSTEM_PROMPT)
-            await callbacks.handle_system_prompt(callback, settings_for(), path, state_for())
+            callback = callback_for(keyboards.CALLBACK_SYSTEM_PROMPT, AI_OWNER_ID)
+            await callbacks.handle_system_prompt(callback, settings_for(AI_OWNER_ID), path, state_for())
             self.assertGreater(callback.message.answer.await_count, 1)
             for call in callback.message.answer.await_args_list:
                 self.assertIsNone(call.kwargs["parse_mode"])
@@ -178,9 +182,9 @@ class PersonalHandlersTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_large_legacy_examples_are_viewable_in_chunks(self):
         text = '{"examples": ["' + "😀" * 4000 + '"]}'
-        callback = callback_for(keyboards.CALLBACK_PROMPT_JSON)
+        callback = callback_for(keyboards.CALLBACK_PROMPT_JSON, AI_OWNER_ID)
         with patch.object(callbacks, "read_prompt_json", return_value=text):
-            await callbacks.handle_prompt_json(callback, settings_for(), Path("unused"), state_for())
+            await callbacks.handle_prompt_json(callback, settings_for(AI_OWNER_ID), Path("unused"), state_for())
         sent = callback.message.answer.await_args_list
         self.assertEqual("".join(call.args[0] for call in sent), text)
         self.assertGreater(len(sent), 1)
@@ -191,8 +195,8 @@ class PersonalHandlersTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_user_history_does_not_use_legacy_ai_filter(self):
         settings = settings_for()
-        settings.gemini_enabled = True
-        settings = settings.model_copy(update={"gemini_api_key": SecretStr("token"), "primary_filter_enabled": False})
+        settings.ai_enabled = True
+        settings = settings.model_copy(update={"anthropic_api_key": SecretStr("token"), "primary_filter_enabled": False})
         store = SimpleNamespace(recent_projects=AsyncMock(return_value=[project_for(180)]), passed_ids=AsyncMock())
         callback = callback_for("list:all:0")
         await callbacks.handle_list_page(callback, settings, store)
@@ -225,11 +229,6 @@ class PersonalHandlersTest(unittest.IsolatedAsyncioTestCase):
     async def test_removed_project_cannot_be_shown_generated_or_regenerated(self):
         store = SimpleNamespace(find_project=AsyncMock(return_value=project_for(99)))
         generator = SimpleNamespace(generate=AsyncMock())
-        for handler, prefix in [(callbacks.handle_generate, "gen:"), (callbacks.handle_regen, "regen:")]:
-            callback = callback_for(prefix + "project-1")
-            await handler(callback, settings_for(), store, generator)
-            generator.generate.assert_not_awaited()
-            self.assertTrue(callback.answer.await_args.kwargs["show_alert"])
         callback = callback_for("show:project-1")
         await callbacks.handle_show_project(callback, settings_for(), store)
         callback.message.answer.assert_not_awaited()

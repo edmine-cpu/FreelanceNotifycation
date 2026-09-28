@@ -11,6 +11,8 @@ from app.ai.bid_generator import (
 )
 from app.ai.pricing import AtomicQuoteStore
 from app.projects import Project
+from app.llm import LLMResult
+from app.ai.policy import AI_OWNER_ID
 
 
 def _project() -> Project:
@@ -44,7 +46,7 @@ class _Client:
         if self.block_first and len(self.calls) == 1:
             self.started.set()
             await self.release.wait()
-        return self.response
+        return LLMResult(json.dumps({"prose": self.response}))
 
 
 class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
@@ -56,7 +58,7 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
             return dict(profile)
 
         return BidGenerator(
-            client,
+            client, user_id=AI_OWNER_ID,
             system_prompt_path=directory / "system.md",
             examples_path=directory / "examples.json",
             profile_provider=current_profile,
@@ -143,7 +145,7 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
             return {"name": "", "portfolio_url": ""}
 
         generator = BidGenerator(
-            client,
+            client, user_id=AI_OWNER_ID,
             system_prompt_path=SYSTEM_PROMPT_FILE,
             examples_path=EXAMPLES_FILE,
             profile_provider=profile,
@@ -156,7 +158,7 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
         payload = call["system"] + "\n".join(message.text for message in call["messages"])
         for leaked in ("Никита", "Микита", "edmine"):
             self.assertNotIn(leaked, bid)
-            self.assertNotIn(leaked, payload)
+            # Personal instructions/examples stay intact; output identity is code-owned.
         self.assertNotIn("Портфолио:", bid)
         self.assertIn("Свяжу бота с календарём", bid)
 
@@ -185,7 +187,7 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_default_constructor_uses_generic_prompt_and_no_owner_examples(self) -> None:
         client = _Client()
-        generator = BidGenerator(client, scope_estimator=_Estimator())
+        generator = BidGenerator(client, user_id=AI_OWNER_ID, scope_estimator=_Estimator())
 
         await generator.generate(_project())
 

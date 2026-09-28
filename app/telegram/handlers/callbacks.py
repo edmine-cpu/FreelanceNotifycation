@@ -15,7 +15,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from app.config import Settings, parse_skill_ids
 from app.ai import BidGenerator, BidGenerationError
 from app.ai.prompt_store import PromptJsonError, read_prompt_json, write_prompt_json
-from app.llm import QuotaExceededError
+from app.ai.policy import ai_allowed, ACCESS_DENIED
 from app.source import FreelancehuntSource
 from app.storage import StateStore
 
@@ -346,6 +346,10 @@ async def handle_system_prompt_message(
     message: Message, settings: Settings, bid_generator: BidGenerator | None,
     system_prompt_path: Path, state: FSMContext,
 ) -> None:
+    if not message.from_user or not ai_allowed(message.from_user.id):
+        await state.clear()
+        await message.answer(ACCESS_DENIED)
+        return
     if not _is_allowed_chat(message.chat.id, settings):
         return
     prompt = (message.text or "").strip()
@@ -447,7 +451,7 @@ async def handle_category_id_message(
         )
     else:
         text = formatting.format_settings_notice(f"Категория #{skill_id} уже есть в списке.")
-    await _edit_menu_from_state(message, state, text, keyboards.settings_keyboard())
+    await _edit_menu_from_state(message, state, text, keyboards.settings_keyboard(ai_enabled=ai_allowed(settings.ai_user_id)))
     await state.clear()
 
 
@@ -517,6 +521,10 @@ async def handle_prompt_json_message(
     prompt_examples_path: Path,
     state: FSMContext,
 ) -> None:
+    if not message.from_user or not ai_allowed(message.from_user.id):
+        await state.clear()
+        await message.answer(ACCESS_DENIED)
+        return
     if not _is_allowed_chat(message.chat.id, settings):
         await _delete_user_message(message)
         return
@@ -625,96 +633,13 @@ async def handle_show_project(
     try:
         await callback.message.answer(
             text,
-            reply_markup=keyboards.project_detail_keyboard(project),
+            reply_markup=keyboards.project_detail_keyboard(project, ai_enabled=ai_allowed(callback.from_user.id)),
         )
     except TelegramAPIError:
         log.exception("failed to send project detail for %s", project_id)
         await callback.answer("Не удалось отправить", show_alert=True)
         return
     await callback.answer()
-
-
-@router.callback_query(F.data.startswith(keyboards.CALLBACK_GEN_PREFIX))
-async def handle_generate(
-    callback: CallbackQuery,
-    settings: Settings,
-    store: StateStore,
-    bid_generator: BidGenerator | None,
-) -> None:
-    if not await _ensure_callback_allowed(callback, settings):
-        return
-    if bid_generator is None:
-        await callback.answer("ИИ выключен в настройках", show_alert=True)
-        return
-
-    project_id = (callback.data or "")[len(keyboards.CALLBACK_GEN_PREFIX):]
-    project = await store.find_project(project_id)
-    if project is None or _find_category(settings, project.skill_id) is None:
-        await callback.answer("Проект не найден в истории", show_alert=True)
-        return
-
-    await callback.answer("Генерирую…")
-    try:
-        bid_text = await bid_generator.generate(project)
-    except QuotaExceededError:
-        log.warning("ai quota exhausted on generate for project %s", project_id)
-        await _send_notice(callback, _QUOTA_NOTICE)
-        return
-    except BidGenerationError as exc:
-        log.exception("generate failed for project %s: %s", project_id, exc)
-        await _send_notice(callback, "Не удалось сгенерировать ответ")
-        return
-
-    try:
-        await callback.message.reply(
-            bid_text,
-            reply_markup=keyboards.regen_bid_keyboard(project_id),
-            parse_mode=None,
-        )
-    except TelegramAPIError:
-        log.exception("failed to send generated bid for %s", project_id)
-
-
-@router.callback_query(F.data.startswith(keyboards.CALLBACK_REGEN_PREFIX))
-async def handle_regen(
-    callback: CallbackQuery,
-    settings: Settings,
-    store: StateStore,
-    bid_generator: BidGenerator | None,
-) -> None:
-    if not await _ensure_callback_allowed(callback, settings):
-        return
-    if bid_generator is None:
-        await callback.answer("ИИ выключен в настройках", show_alert=True)
-        return
-
-    project_id = (callback.data or "")[len(keyboards.CALLBACK_REGEN_PREFIX):]
-    project = await store.find_project(project_id)
-    if project is None or _find_category(settings, project.skill_id) is None:
-        await callback.answer("Проект не найден в истории", show_alert=True)
-        return
-
-    await callback.answer("Перегенерирую…")
-    try:
-        bid_text = await bid_generator.generate(project)
-    except QuotaExceededError:
-        log.warning("ai quota exhausted on regen for project %s", project_id)
-        await _send_notice(callback, _QUOTA_NOTICE)
-        return
-    except BidGenerationError as exc:
-        log.exception("regen failed for project %s: %s", project_id, exc)
-        await _send_notice(callback, "Не удалось перегенерировать ответ")
-        return
-
-    try:
-        await callback.message.edit_text(
-            bid_text,
-            reply_markup=keyboards.regen_bid_keyboard(project_id),
-            parse_mode=None,
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc):
-            log.exception("editMessageText failed for regen")
 
 
 async def _send_notice(callback: CallbackQuery, text: str) -> None:
@@ -741,6 +666,10 @@ async def _send_settings_flow_message(
 
 
 async def _ensure_callback_allowed(callback: CallbackQuery, settings: Settings) -> bool:
+    if callback.data in {keyboards.CALLBACK_PROMPT_JSON, keyboards.CALLBACK_PROMPT_EDIT,
+                         keyboards.CALLBACK_SYSTEM_PROMPT, keyboards.CALLBACK_SYSTEM_PROMPT_EDIT} and not ai_allowed(callback.from_user.id):
+        await callback.answer(ACCESS_DENIED, show_alert=True)
+        return False
     if (
         callback.message is not None
         and _is_allowed_chat(callback.message.chat.id, settings)

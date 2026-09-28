@@ -1,11 +1,11 @@
 from .bid_generator import BidGenerator, BidGenerationError
-from .client import GeminiClient
+from .client import AnthropicClient
 from .screener import OrderScreener, ScreenResult
 
 __all__ = [
     "BidGenerator",
     "BidGenerationError",
-    "GeminiClient",
+    "AnthropicClient",
     "OrderScreener",
     "ScreenResult",
 ]

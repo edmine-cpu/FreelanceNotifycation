@@ -7,7 +7,6 @@ from pathlib import Path
 from app.ai.bid_generator import BidGenerationError, BidGenerator
 from app.ai.pricing import (
     AtomicQuoteStore,
-    LLMScopeEstimator,
     PricingEngine,
     PricingQuote,
     QuoteService,
@@ -17,7 +16,8 @@ from app.ai.pricing import (
     parse_budget,
     render_bid,
 )
-from app.llm import LLMError
+from app.llm import LLMError, LLMResult
+from app.ai.policy import AI_OWNER_ID
 from app.projects import Project
 
 
@@ -68,6 +68,7 @@ class _SequenceClient:
         system_instruction: str,
         messages: list,
         temperature: float = 0.8,
+        **kwargs,
     ) -> str:
         self.calls.append(
             {
@@ -78,7 +79,7 @@ class _SequenceClient:
         )
         if self._error is not None:
             raise self._error
-        return self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]
+        return LLMResult(json.dumps({"prose": self._responses[min(len(self.calls) - 1, len(self._responses) - 1)]}))
 
 
 class PricingEngineTest(unittest.TestCase):
@@ -301,14 +302,15 @@ class QuotePersistenceTest(unittest.IsolatedAsyncioTestCase):
                 "Второй вариант -- похожее уже делал",
             )
             generator = BidGenerator(
-                client,
+                client, user_id=AI_OWNER_ID,
                 quote_store=AtomicQuoteStore(Path(tmp) / "quotes.json"),
                 scope_estimator=estimator,
                 rates_provider=rates,
             )
 
             first = await generator.generate(_project())
-            second = await generator.generate(_project())
+            previous = await generator.generate_bid(_project())
+            second = (await generator.generate_bid(_project(), previous=previous))["rendered"]
 
             self.assertNotEqual(first.splitlines()[0], second.splitlines()[0])
             self.assertEqual(first.splitlines()[-1], second.splitlines()[-1])
@@ -325,7 +327,7 @@ class QuotePersistenceTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "quotes.json"
             generator = BidGenerator(
-                _SequenceClient(error=LLMError("prose failed")),
+                _SequenceClient(error=LLMError("prose failed")), user_id=AI_OWNER_ID,
                 quote_store=AtomicQuoteStore(path),
                 scope_estimator=_SequenceEstimator("8"),
                 rates_provider=StaticRatesSource(),
@@ -338,13 +340,6 @@ class QuotePersistenceTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(stored)
             self.assertEqual(stored["tier"], "8")
 
-    async def test_scope_estimator_uses_zero_temperature(self) -> None:
-        client = _SequenceClient("24")
-
-        tier = await LLMScopeEstimator(client).estimate(_project())
-
-        self.assertEqual(tier, "24")
-        self.assertEqual(client.calls[0]["temperature"], 0.0)
 
 
 if __name__ == "__main__":

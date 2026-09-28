@@ -10,6 +10,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 
 from app.ai import BidGenerator, OrderScreener
+from app.ai.policy import ai_allowed
 from app.config import Settings, build_category
 from app.source import FreelancehuntSource
 from app.storage.users import UserContext, UserRegistry
@@ -102,8 +103,8 @@ class PublicNotifier:
                     ]
                     notifier = NotifierLoop(
                         self._bot, user.store, self._source, settings,
-                        screener=self._legacy_screener if user.is_legacy_owner else None,
-                        bid_generator=self._generator_factory(user),
+                        screener=self._legacy_screener if ai_allowed(user.user_id) else None,
+                        user_id=user.user_id,
                     )
                     await notifier._tick(selected, successful_skills & categories.keys())
                 except Exception:

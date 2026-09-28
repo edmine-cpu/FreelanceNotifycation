@@ -10,7 +10,8 @@ from app.ai import BidGenerator
 from app.source import FreelancehuntSource
 from app.storage.users import UserContext, UserRegistry
 
-from .handlers import callbacks, commands
+from .handlers import callbacks, commands, ai_actions
+from app.ai.store import AIStore
 from .user_context import UserContextMiddleware
 
 
@@ -26,12 +27,15 @@ def build_dispatcher(
     registry: UserRegistry,
     generator_factory: Callable[[UserContext], BidGenerator | None],
     source: FreelancehuntSource,
+    *, ai_store: AIStore | None = None,
 ) -> Dispatcher:
     dp = Dispatcher(events_isolation=SimpleEventIsolation())
     dp["source"] = source
-    middleware = UserContextMiddleware(registry, generator_factory)
+    dp["ai_store"] = ai_store or AIStore(settings.state_file.parent / "ai.sqlite3")
+    middleware = UserContextMiddleware(registry, generator_factory, dp["ai_store"])
     dp.message.outer_middleware(middleware)
     dp.callback_query.outer_middleware(middleware)
     dp.include_router(commands.router)
     dp.include_router(callbacks.router)
+    dp.include_router(ai_actions.router)
     return dp

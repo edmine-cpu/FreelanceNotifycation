@@ -10,6 +10,10 @@ CALLBACK_REGEN_PREFIX = "regen:"
 CALLBACK_HIDE = "hide"
 CALLBACK_SHOW_PREFIX = "show:"
 CALLBACK_GEN_PREFIX = "gen:"
+CALLBACK_SKIP_PREFIX = "ai_skip:"
+CALLBACK_CANCEL_AI_PREFIX = "ai_cancel:"
+CALLBACK_RETRY_AI_PREFIX = "ai_retry:"
+CALLBACK_AI_USAGE = "ai_usage"
 CALLBACK_SETTINGS = "settings"
 CALLBACK_ADD_CATEGORY = "settings:add_category"
 CALLBACK_CATEGORY_NAMES = "settings:category_names"
@@ -65,15 +69,16 @@ def start_menu_keyboard(categories: list[Category]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def settings_keyboard() -> InlineKeyboardMarkup:
+def settings_keyboard(*, ai_enabled: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="➕ Добавить новую категорию по ID", callback_data=CALLBACK_ADD_CATEGORY)],
             [InlineKeyboardButton(text="🏷️ Имена категорий", callback_data=CALLBACK_CATEGORY_NAMES)],
             [InlineKeyboardButton(text="➖ Удалить категорию", callback_data=CALLBACK_REMOVE_CATEGORIES)],
             [InlineKeyboardButton(text="👤 Моё имя и портфолио", callback_data=CALLBACK_PROFILE)],
-            [InlineKeyboardButton(text="📝 Мой промпт", callback_data=CALLBACK_SYSTEM_PROMPT)],
-            [InlineKeyboardButton(text="📑 Примеры откликов (JSON)", callback_data=CALLBACK_PROMPT_JSON)],
+            *([[InlineKeyboardButton(text="📝 Мой промпт", callback_data=CALLBACK_SYSTEM_PROMPT)],
+               [InlineKeyboardButton(text="📑 Примеры откликов (JSON)", callback_data=CALLBACK_PROMPT_JSON)],
+               [InlineKeyboardButton(text="Расходы AI", callback_data=CALLBACK_AI_USAGE)]] if ai_enabled else []),
             [InlineKeyboardButton(text="🔔 Уведомления категорий", callback_data=CALLBACK_NOTIFICATIONS)],
             [InlineKeyboardButton(text="🏠 В меню", callback_data=CALLBACK_START)],
         ]
@@ -208,29 +213,29 @@ def empty_history_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def project_detail_keyboard(project: Project) -> InlineKeyboardMarkup:
+def project_detail_keyboard(project: Project, *, ai_enabled: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔗 Открыть проект", url=project.url)],
-            [InlineKeyboardButton(text="✍️ Сгенерировать ответ", callback_data=f"{CALLBACK_GEN_PREFIX}{project.id}")],
+            *([[InlineKeyboardButton(text="Сгенерировать ставку", callback_data=f"{CALLBACK_GEN_PREFIX}{project.id}")]] if ai_enabled else []),
             [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
         ]
     )
 
 
-def notification_keyboard(project_id: str) -> InlineKeyboardMarkup:
+def notification_keyboard(project_id: str, *, ai_enabled: bool = False) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✍️ Сгенерировать ответ", callback_data=f"{CALLBACK_GEN_PREFIX}{project_id}")],
+            *([[InlineKeyboardButton(text="Сгенерировать ставку", callback_data=f"{CALLBACK_GEN_PREFIX}{project_id}")]] if ai_enabled else []),
             [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
         ]
     )
 
 
-def regen_bid_keyboard(project_id: str) -> InlineKeyboardMarkup:
+def regen_bid_keyboard(project_id: str, version: str = "") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Перегенерировать", callback_data=f"{CALLBACK_REGEN_PREFIX}{project_id}")],
+            [InlineKeyboardButton(text="Новый вариант", callback_data=f"{CALLBACK_REGEN_PREFIX}{project_id}:{version}")],
             [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
         ]
     )
@@ -246,3 +251,16 @@ def _truncate(text: str) -> str:
     if len(text) <= MAX_BUTTON_TEXT:
         return text
     return text[: MAX_BUTTON_TEXT - 1].rstrip() + "…"
+
+
+def revision_keyboard(operation_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Пропустить", callback_data=CALLBACK_SKIP_PREFIX+operation_id)],
+        [InlineKeyboardButton(text="Отмена", callback_data=CALLBACK_CANCEL_AI_PREFIX+operation_id)],
+    ])
+
+
+def retry_ai_keyboard(operation_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Повторить попытку", callback_data=CALLBACK_RETRY_AI_PREFIX+operation_id)]
+    ])

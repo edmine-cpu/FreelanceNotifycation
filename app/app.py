@@ -1,9 +1,12 @@
 import asyncio
 import logging
 import signal
+import httpx
 
 from app.config import Settings
-from app.ai import BidGenerator, GeminiClient, OrderScreener
+from app.ai import BidGenerator, AnthropicClient, OrderScreener
+from app.ai.policy import AI_OWNER_ID, ai_allowed
+from app.ai.store import AIStore
 from app.ai.pricing import AtomicQuoteStore
 from app.notifier.public import PublicNotifier
 from app.rates import RatesProvider
@@ -25,44 +28,52 @@ async def run(settings: Settings) -> None:
     )
 
     generators: dict[int, BidGenerator] = {}
-    gemini: GeminiClient | None = None
-    screener: OrderScreener | None = None
+    ai_store = AIStore(settings.state_file.parent / "ai.sqlite3")
+    ai_store.recover_interrupted()
+    http = httpx.AsyncClient()
+    bid_client = None
+    screener = None
+    rates_provider = RatesProvider(fallback=settings.fallback_rates)
+
+    async def alert_usage():
+        for month, threshold, level, total in ai_store.claim_alerts(
+            AI_OWNER_ID, settings.ai_monthly_alert_usd, settings.ai_cost_timezone
+        ):
+            try:
+                await bot.send_message(
+                    AI_OWNER_ID, f"Расходы AI за {month}: ${total:.4f}, достигнуто {level}% "
+                    f"порога ${threshold}. AI продолжает работать.", parse_mode=None)
+            except Exception:
+                ai_store.release_alert(month, threshold, level)
+                log.warning("could not deliver AI usage alert")
+
     if settings.ai_active:
-        gemini = GeminiClient(
-            api_key=settings.gemini_api_key.get_secret_value(),
-            model=settings.gemini_model,
-            timeout=settings.gemini_timeout_sec,
-        )
-        rates_provider = RatesProvider(fallback=settings.fallback_rates)
-        # Primary check is fail-open and runs on every new project inside a tick,
-        # so it must not block: give it its own client with minimal retries.
-        # Bid generation keeps full retries for both automatic and manual bids.
-        screen_client = GeminiClient(
-            api_key=settings.gemini_api_key.get_secret_value(),
-            model=settings.gemini_model,
-            timeout=settings.gemini_timeout_sec,
-            max_retries=1,
-        )
-        screener = OrderScreener(screen_client)
-        log.info("ai enabled, model=%s", settings.gemini_model)
+        bid_client = AnthropicClient(
+            settings.anthropic_api_key.get_secret_value(), settings.ai_bid_model,
+            http=http, store=ai_store, timeout=settings.ai_bid_timeout_sec,
+            max_tokens=settings.ai_bid_max_tokens, effort=settings.ai_bid_effort, on_usage=alert_usage)
+        screen_client = AnthropicClient(
+            settings.anthropic_api_key.get_secret_value(), settings.ai_screen_model,
+            http=http, store=ai_store, timeout=settings.ai_screen_timeout_sec,
+            max_tokens=settings.ai_screen_max_tokens, on_usage=alert_usage)
+        screener = OrderScreener(screen_client, user_id=AI_OWNER_ID, store=ai_store,
+                                 max_context_chars=settings.ai_max_context_chars)
+        log.info("AI owner=%s screen=%s bid=%s", AI_OWNER_ID, settings.ai_screen_model, settings.ai_bid_model)
     else:
-        log.info("ai disabled (no API key or GEMINI_ENABLED=false)")
+        log.info("AI disabled (no ANTHROPIC_API_KEY or AI_ENABLED=false)")
 
     def generator_for(user: UserContext) -> BidGenerator | None:
-        if gemini is None:
+        if bid_client is None or not ai_allowed(user.user_id):
             return None
         if user.user_id not in generators:
             generators[user.user_id] = BidGenerator(
-                gemini,
-                examples_path=user.prompt_examples_path,
-                system_prompt_path=user.system_prompt_path,
-                profile_provider=user.store.profile,
-                rates_provider=rates_provider,
-                quote_store=AtomicQuoteStore(user.quote_path),
-            )
+                bid_client, user_id=user.user_id, ai_store=ai_store,
+                examples_path=user.prompt_examples_path, system_prompt_path=user.system_prompt_path,
+                profile_provider=user.store.profile, rates_provider=rates_provider,
+                quote_store=AtomicQuoteStore(user.quote_path), max_context_chars=settings.ai_max_context_chars)
         return generators[user.user_id]
 
-    dispatcher = build_dispatcher(settings, registry, generator_for, source)
+    dispatcher = build_dispatcher(settings, registry, generator_for, source, ai_store=ai_store)
     notifier = PublicNotifier(bot, registry, source, settings, generator_for, screener)
 
     stop_event = asyncio.Event()
@@ -94,6 +105,12 @@ async def run(settings: Settings) -> None:
     await asyncio.gather(polling_task, notifier_task, return_exceptions=True)
     stop_task.cancel()
 
+    pending = list(ai_store.flights.values())
+    for task in pending:
+        task.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    await http.aclose()
+    ai_store.close()
     await source.aclose()
     await bot.session.close()
     # Let Docker restart the service if either critical loop stopped by itself.

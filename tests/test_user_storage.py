@@ -133,7 +133,7 @@ class UserRegistryTest(unittest.IsolatedAsyncioTestCase):
         await registry.migrate_legacy()
         owner, newcomer = await registry.get(1), await registry.get(2)
         self.assertTrue(owner.is_legacy_owner)
-        self.assertTrue((await owner.settings()).primary_filter_enabled)
+        self.assertFalse((await owner.settings()).primary_filter_enabled)  # legacy owner is not the AI owner
         self.assertFalse((await newcomer.settings()).primary_filter_enabled)
         self.assertEqual((await owner.settings()).skill_ids, "180,28")
         self.assertEqual((await owner.settings()).category_names, {28: "Owner category"})
@@ -224,11 +224,11 @@ class UserRegistryTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "handled")
         self.assertFalse(await user.store.is_active())
-        factory.assert_awaited_once_with(user)
+        factory.assert_not_awaited()
         handler.assert_awaited_once_with(message, data)
         self.assertIs(data["user_context"], user)
         self.assertIs(data["store"], user.store)
-        self.assertIs(data["bid_generator"], generator)
+        self.assertIsNone(data["bid_generator"])
         self.assertIs(data["source"], shared_source)
         self.assertEqual(data["settings"].telegram_chat_id, "20")
         self.assertEqual(data["prompt_examples_path"], user.prompt_examples_path)

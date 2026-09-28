@@ -44,12 +44,13 @@ def format_project_notification(project: Project) -> str:
     return "\n\n".join(parts)
 
 
-def format_start_menu(category_label: str) -> str:
+def format_start_menu(category_label: str, *, ai_enabled: bool = False) -> str:
     return (
-        "Привет! Я помогу следить за проектами на Freelancehunt и готовить отклики.\n\n"
+        "Привет! Я помогу следить за проектами на Freelancehunt.\n\n"
         f"Твои категории: <b>{html.escape(_category_label(category_label))}</b>.\n\n"
         "Открой ⚙️ Настройки: добавь категории по ID, укажи своё имя и ссылку на портфолио. "
-        "Там же можно задать названия категорий, уведомления и свой промпт для ИИ. "
+        "Там же можно задать названия категорий и уведомления. "
+        + ("Владельцу доступны промпт, примеры и /ai_usage. " if ai_enabled else "") +
         "Все эти настройки действуют только для тебя.\n\n"
         "📂 — проекты из истории; 🔴 — все проекты категории.\n"
         "/settings — настройки · /cancel — отменить ввод\n"

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.config import Settings, parse_skill_ids
+from app.ai.policy import ai_allowed
 
 from .state import StateStore
 
@@ -38,7 +39,8 @@ class UserContext:
                 "state_file": self.prompt_examples_path.parent / "state.json",
                 "prompt_examples_file": self.prompt_examples_path,
                 "quote_file": self.quote_path,
-                "primary_filter_enabled": self.is_legacy_owner,
+                "primary_filter_enabled": ai_allowed(self.user_id),
+                "ai_user_id": self.user_id,
             },
         )
 

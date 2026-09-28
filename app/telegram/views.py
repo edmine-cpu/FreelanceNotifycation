@@ -1,6 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup
 
 from app.config import Settings
+from app.ai.policy import ai_allowed
 from app.projects import Project
 
 from . import formatting, keyboards
@@ -8,7 +9,7 @@ from . import formatting, keyboards
 
 def start_view(settings: Settings) -> tuple[str, InlineKeyboardMarkup]:
     return (
-        formatting.format_start_menu(settings.category_label),
+        formatting.format_start_menu(settings.category_label, ai_enabled=ai_allowed(settings.ai_user_id)),
         keyboards.start_menu_keyboard(settings.categories),
     )
 
@@ -22,7 +23,7 @@ def settings_view(
             len(muted_skill_ids & {category.skill_id for category in settings.categories}),
             profile,
         ),
-        keyboards.settings_keyboard(),
+        keyboards.settings_keyboard(ai_enabled=ai_allowed(settings.ai_user_id)),
     )
 
 

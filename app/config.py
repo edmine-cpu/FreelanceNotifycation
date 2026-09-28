@@ -1,5 +1,8 @@
 import re
 from pathlib import Path
+from decimal import Decimal
+from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -82,12 +85,33 @@ class Settings(BaseSettings):
     usd_eur_rate: float = 0.92
     usd_pln_rate: float = 4.0
 
-    gemini_api_key: SecretStr = Field(default=SecretStr(""))
-    gemini_model: str = "gemini-3.1-pro-preview"
-    gemini_enabled: bool = True
-    gemini_timeout_sec: float = 20.0
-    # The legacy owner's stack filter must never hide orders from new users.
+    anthropic_api_key: SecretStr = Field(default=SecretStr(""))
+    ai_enabled: bool = True
+    ai_screen_model: Literal["claude-haiku-4-5-20251001"] = "claude-haiku-4-5-20251001"
+    ai_bid_model: Literal["claude-opus-5-5"] = "claude-opus-5-5"
+    ai_screen_max_tokens: int = Field(default=256, ge=64, le=2048)
+    ai_bid_max_tokens: int = Field(default=2048, ge=256, le=16384)
+    ai_bid_effort: Literal["low", "medium"] = "low"
+    ai_screen_timeout_sec: float = Field(default=30, ge=1, le=120)
+    ai_bid_timeout_sec: float = Field(default=120, ge=1, le=240)
+    ai_monthly_alert_usd: Decimal = Field(default=Decimal("20"), ge=0)
+    ai_cost_timezone: str = "Europe/Kyiv"
+    ai_max_context_chars: int = Field(default=60000, ge=4000)
+    # Only populated by a verified UserContext, never ENV/user preferences.
+    ai_user_id: int | None = Field(default=None, exclude=True)
     primary_filter_enabled: bool = False
+
+    @field_validator("ai_user_id", mode="before")
+    @classmethod
+    def _ignore_unverified_ai_user(cls, value) -> None:
+        # UserContext sets its verified snapshot using model_copy(update=...).
+        return None
+
+    @field_validator("ai_cost_timezone")
+    @classmethod
+    def _check_timezone(cls, value: str) -> str:
+        ZoneInfo(value)
+        return value
 
     @field_validator("skill_ids")
     @classmethod
@@ -109,7 +133,7 @@ class Settings(BaseSettings):
 
     @property
     def ai_active(self) -> bool:
-        return self.gemini_enabled and bool(self.gemini_api_key.get_secret_value())
+        return self.ai_enabled and bool(self.anthropic_api_key.get_secret_value())
 
     @property
     def fallback_rates(self) -> dict[str, float]:

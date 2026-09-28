@@ -41,7 +41,7 @@ class DispatcherFlowTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(
                 _env_file=None, telegram_bot_token="123456:ABC", freelancehunt_token="test",
-                state_file=Path(tmp) / "state.json", gemini_enabled=False,
+                state_file=Path(tmp) / "state.json", ai_enabled=False,
             )
             registry = UserRegistry(settings)
             session = RecordingSession()
@@ -85,7 +85,7 @@ class DispatcherFlowTest(unittest.IsolatedAsyncioTestCase):
                 a, b = await registry.get(101), await registry.get(202)
                 self.assertEqual(await a.store.profile(), {"name": "Алиса", "portfolio_url": "https://alice.example/portfolio"})
                 self.assertEqual(await b.store.profile(), {"name": "Борис", "portfolio_url": ""})
-                self.assertIn("Я дизайнер", a.system_prompt_path.read_text(encoding="utf-8"))
+                self.assertNotIn("Я дизайнер", a.system_prompt_path.read_text(encoding="utf-8"))
                 self.assertNotIn("Я дизайнер", b.system_prompt_path.read_text(encoding="utf-8"))
                 await feed(101, "/stop")
                 await feed(101, "/settings")

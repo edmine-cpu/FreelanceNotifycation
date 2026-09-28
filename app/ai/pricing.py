@@ -12,7 +12,6 @@ from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal, Protocol
 
-from app.llm import ChatMessage, LLMClient, LLMResponseError
 from app.projects import Project
 
 log = logging.getLogger(__name__)
@@ -184,31 +183,6 @@ class PricingQuote:
         )
 
 
-class LLMScopeEstimator:
-    def __init__(
-        self,
-        client: LLMClient,
-        prompt_path: Path = SCOPE_PROMPT_FILE,
-    ) -> None:
-        self._client = client
-        self._prompt = prompt_path.read_text(encoding="utf-8").strip()
-
-    async def estimate(self, project: Project) -> ScopeTier:
-        payload = json.dumps(
-            {"title": project.title, "description": project.description},
-            ensure_ascii=False,
-        )
-        raw = await self._client.generate(
-            system_instruction=self._prompt,
-            messages=[ChatMessage(role="user", text=payload)],
-            temperature=0.0,
-        )
-        match = re.search(r"(?<!\d)(omit|80|40|24|16|8|4)(?!\d)", raw.lower())
-        if match is None:
-            raise LLMResponseError(f"invalid scope tier: {raw[:100]!r}")
-        return match.group(1)  # type: ignore[return-value]
-
-
 class InMemoryQuoteStore:
     def __init__(self) -> None:
         self._quotes: dict[str, dict] = {}
@@ -355,7 +329,7 @@ class PricingEngine:
 class QuoteService:
     def __init__(
         self,
-        estimator: ScopeEstimator,
+        estimator: ScopeEstimator | None,
         engine: PricingEngine,
         store: QuoteStore,
         rates: RatesSource,
@@ -373,10 +347,14 @@ class QuoteService:
             stored = await self._store.pricing_quote(project.id)
             if stored is not None:
                 try:
-                    return PricingQuote.from_dict(stored)
+                    quote = PricingQuote.from_dict(stored)
+                    if quote.input_fingerprint == input_fingerprint(project):
+                        return quote
                 except (InvalidOperation, TypeError, ValueError):
                     pass
 
+            if self._estimator is None:
+                raise ValueError("a scope tier must come from the combined bid response")
             tier = await self._estimator.estimate(project)
             rates = await self._rates.get_rates()
             quote = self._engine.quote(project, tier, rates)
@@ -385,6 +363,26 @@ class QuoteService:
                     project.id, quote.to_dict()
                 )
                 return PricingQuote.from_dict(saved)
+            await self._store.replace_pricing_quote(project.id, quote.to_dict())
+            return quote
+
+    async def existing(self, project: Project) -> PricingQuote | None:
+        stored = await self._store.pricing_quote(project.id)
+        if stored:
+            try:
+                quote = PricingQuote.from_dict(stored)
+                if quote.input_fingerprint == input_fingerprint(project):
+                    return quote
+            except (InvalidOperation, TypeError, ValueError):
+                pass
+        return None
+
+    async def save_tier(self, project: Project, tier: ScopeTier) -> PricingQuote:
+        async with await self._project_lock(project.id):
+            existing = await self.existing(project)
+            if existing:
+                return existing
+            quote = self._engine.quote(project, tier, await self._rates.get_rates())
             await self._store.replace_pricing_quote(project.id, quote.to_dict())
             return quote
 

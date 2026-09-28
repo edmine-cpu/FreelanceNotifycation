@@ -1,61 +1,51 @@
-"""Provider-agnostic LLM interface.
-
-All model-specific code lives in a single client implementation (currently
-``app.ai.GeminiClient``). To switch providers or models, write a new class
-that satisfies ``LLMClient`` and swap the instantiation in ``app.app.run``;
-prompt-building code (e.g. ``BidGenerator``) depends only on the types here, not
-on any SDK.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
-
-Role = Literal["user", "model"]
+"""Provider contract: every request carries its verified owner and operation."""
+from dataclasses import dataclass, field
+from typing import Literal, Protocol
 
 
 class LLMError(Exception):
-    """Base class for failures coming from an LLM client."""
+    pass
 
 
 class LLMResponseError(LLMError):
-    """The provider returned a successful HTTP response that cannot be used as
-    generated text."""
+    pass
+
+
+class UncertainRequestError(LLMError):
+    """Provider may have processed the request; do not automatically repeat it."""
 
 
 class QuotaExceededError(LLMError):
-    """The model rejected the request because a quota or rate limit is exhausted
-    (HTTP 429). Distinct from transient errors: the caller should back off / wait,
-    not just retry immediately."""
-
-    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+    def __init__(self, message: str, *, retry_after: float | None = None):
         super().__init__(message)
         self.retry_after = retry_after
 
 
 @dataclass(frozen=True)
 class ChatMessage:
-    """One turn in a chat exchange, independent of any vendor SDK."""
-
-    role: Role
+    role: Literal["user", "model", "assistant"]
     text: str
 
 
-@runtime_checkable
+@dataclass(frozen=True)
+class AIRequest:
+    user_id: int
+    project_id: str
+    purpose: Literal["screen", "bid", "regenerate"]
+    operation_id: str
+
+
+@dataclass(frozen=True)
+class LLMResult:
+    text: str
+    model: str = ""
+    request_id: str = ""
+    stop_reason: str = "end_turn"
+    usage: dict = field(default_factory=dict)
+
+
 class LLMClient(Protocol):
-    """The single contract every model client must satisfy.
-
-    Implementations own *all* vendor-specific details (SDK calls, request/response
-    shapes, retry policy). Callers pass plain ``ChatMessage`` objects and get back
-    text, so they never import a provider SDK.
-    """
-
     async def generate(
-        self,
-        *,
-        system_instruction: str,
-        messages: list[ChatMessage],
-        temperature: float = 0.8,
-    ) -> str:
-        ...
+        self, *, system_instruction: str, messages: list[ChatMessage],
+        context: AIRequest, schema: dict | None = None,
+    ) -> LLMResult: ...
