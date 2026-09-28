@@ -84,7 +84,7 @@ class _SequenceClient:
 
 class PricingEngineTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.engine = PricingEngine(Decimal("12"))
+        self.engine = PricingEngine()
         self.rates = {
             "UAH": Decimal("43"),
             "EUR": Decimal("0.92"),
@@ -94,16 +94,16 @@ class PricingEngineTest(unittest.TestCase):
     def test_rate_rounds_up_then_applies_exact_client_floor(self) -> None:
         quote = self.engine.quote(_project(budget="5251 UAH"), "8", self.rates)
 
-        # 8 * 12 * 43 = 4128, rounded up to 4500, then exact floor wins.
+        # 8 * 10 * 43 = 3440, rounded up to 3500, then exact floor wins.
         self.assertEqual(quote.amount, Decimal("5251"))
         self.assertEqual(quote.currency, "UAH")
-        self.assertEqual(quote.hourly_rate_usd, Decimal("12"))
+        self.assertEqual(quote.hourly_rate_usd, Decimal("10"))
 
     def test_rounding_steps_for_every_supported_currency(self) -> None:
         cases = [
-            ("", "UAH", Decimal("2500")),
-            ("1 USD", "USD", Decimal("50")),
-            ("1 EUR", "EUR", Decimal("50")),
+            ("", "UAH", Decimal("2000")),
+            ("1 USD", "USD", Decimal("40")),
+            ("1 EUR", "EUR", Decimal("40")),
             ("1 PLN", "PLN", Decimal("200")),
         ]
         for budget, currency, expected in cases:
@@ -122,7 +122,7 @@ class PricingEngineTest(unittest.TestCase):
             with self.subTest(budget=budget):
                 quote = self.engine.quote(_project(budget=budget), "4", self.rates)
                 self.assertEqual(quote.currency, "UAH")
-                self.assertEqual(quote.amount, Decimal("2500"))
+                self.assertEqual(quote.amount, Decimal("2000"))
 
     def test_deadline_is_ceil_hours_over_eight_plus_one_day(self) -> None:
         expected = {
@@ -174,7 +174,7 @@ class RenderingTest(unittest.TestCase):
         rendered = render_bid(prose, self._quote(), "ru")
 
         self.assertIn("Привет - готов сделать проект", rendered)
-        self.assertIn("Ориентировочные цена, сроки: 2500 грн, 1-2 календарных дня.", rendered)
+        self.assertIn("Ориентировочные цена, сроки: 2000 грн, 1-2 календарных дня.", rendered)
         self.assertNotIn("999", rendered)
         self.assertNotIn("3 дня", rendered)
         self.assertNotIn("По срокам", rendered)
@@ -203,7 +203,7 @@ class RenderingTest(unittest.TestCase):
         self.assertIn("Пишите, обсудим детали", rendered)
         self.assertEqual(
             rendered.splitlines()[-1],
-            "Ориентировочные цена, сроки: 2500 грн, 1-2 календарных дня.",
+            "Ориентировочные цена, сроки: 2000 грн, 1-2 календарных дня.",
         )
 
     def test_concrete_render_preserves_domain_price_nouns(self) -> None:
@@ -245,7 +245,7 @@ class RenderingTest(unittest.TestCase):
         self.assertNotIn("Предлагаю 5000", rendered)
         self.assertEqual(
             rendered.splitlines()[-1],
-            "Ориентировочные цена, сроки: 2500 грн, 1-2 календарных дня.",
+            "Ориентировочные цена, сроки: 2000 грн, 1-2 календарных дня.",
         )
 
     def test_vague_render_removes_questions_and_adds_neutral_invitation(self) -> None:
@@ -268,7 +268,7 @@ class RenderingTest(unittest.TestCase):
     def test_quote_line_uses_one_fixed_number(self) -> None:
         line = format_quote_line(self._quote(), "ru")
 
-        self.assertEqual(line, "Ориентировочные цена, сроки: 2500 грн, 1-2 календарных дня.")
+        self.assertEqual(line, "Ориентировочные цена, сроки: 2000 грн, 1-2 календарных дня.")
 
     def test_every_supported_unicode_dash_collapses_to_ascii(self) -> None:
         self.assertEqual(normalize_dashes("a‐‑‒–—―−---b"), "a-b")
@@ -316,7 +316,7 @@ class QuotePersistenceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first.splitlines()[-1], second.splitlines()[-1])
             self.assertEqual(estimator.calls, 1)
             self.assertEqual(rates.calls, 1)
-            self.assertIn("8500 грн, 2-3", first)
+            self.assertIn("7000 грн, 2-3", first)
             self.assertNotIn("—", first)
             self.assertNotIn("--", second)
             target = json.loads(client.calls[0]["messages"][-1].text)

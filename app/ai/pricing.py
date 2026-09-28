@@ -22,7 +22,7 @@ Language = Literal["ru", "ua"]
 ALLOWED_HOURS = (4, 8, 16, 24, 40, 80)
 ALLOWED_TIERS = {"omit", *(str(hours) for hours in ALLOWED_HOURS)}
 POLICY_VERSION = "quote-v1"
-DEFAULT_HOURLY_RATE_USD = Decimal("12")
+DEFAULT_HOURLY_RATE_USD = Decimal("10")
 DEFAULT_RATES = {"UAH": Decimal("43"), "EUR": Decimal("0.92"), "PLN": Decimal("4")}
 SCOPE_PROMPT_FILE = Path(__file__).parent / "prompts" / "scope_prompt.md"
 

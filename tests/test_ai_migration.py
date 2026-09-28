@@ -69,7 +69,7 @@ class MigrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, second)
         self.assertEqual(first, same_update)
         self.assertEqual(len(self.calls), 1)
-        self.assertIn("4500 грн, 1-2", first["rendered"])
+        self.assertIn("3500 грн, 1-2", first["rendered"])
         self.assertIn("Никита", first["rendered"])
         restarted_store = AIStore(self.root / "ai.sqlite3")
         self.addCleanup(restarted_store.close)
