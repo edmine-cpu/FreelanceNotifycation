@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GitHub for Freelancehunt bot updates every minute
+
+[Timer]
+OnBootSec=60s
+OnUnitInactiveSec=60s
+AccuracySec=1s
+Unit=freelancenotify-deploy.service
+
+[Install]
+WantedBy=timers.target

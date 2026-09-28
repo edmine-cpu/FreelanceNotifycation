@@ -1,0 +1,16 @@
+[Unit]
+Description=Update Freelancehunt Telegram bot from GitHub main
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/freelancenotify-deploy
+Environment=GIT_TERMINAL_PROMPT=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/local/sbin/freelancenotify-deploy
+TimeoutStartSec=35min
+TimeoutStopSec=180s
+UMask=0077
+Nice=10

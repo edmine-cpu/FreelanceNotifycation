@@ -2,10 +2,17 @@ services:
   bot:
     build: .
     container_name: fh-bots-notifier
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     env_file: .env
     environment:
       STATE_FILE: /data/state.json
       QUOTE_FILE: /data/quotes.json
     volumes:
       - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
