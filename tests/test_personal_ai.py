@@ -89,7 +89,7 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
             for index, (own, other, marker, foreign) in enumerate(
                 [(profile_a, profile_b, "STYLE_A", "STYLE_B"), (profile_b, profile_a, "STYLE_B", "STYLE_A")]
             ):
-                self.assertIn(own["name"], bids[index])
+                self.assertNotIn(own["name"], bids[index])
                 self.assertIn(own["portfolio_url"], bids[index])
                 self.assertNotIn(other["name"], bids[index])
                 self.assertNotIn(other["portfolio_url"], bids[index])
@@ -120,10 +120,10 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
                 client.release.set()
             first = await pending
 
-            self.assertIn("Анна", first)
+            self.assertNotIn("Анна", first)
             self.assertIn("https://old.example/work", first)
             self.assertNotIn("Ирина", first)
-            self.assertIn("Ирина", second)
+            self.assertNotIn("Ирина", second)
             self.assertIn("https://new.example/work", second)
             self.assertNotIn("Анна", second)
             self.assertIn("BEFORE", client.calls[0]["system"])
@@ -177,7 +177,7 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
 
             bid = await generator.generate(_project(), language="ua")
 
-            self.assertIn("Олена", bid)
+            self.assertNotIn("Олена", bid)
             self.assertIn(f"Портфоліо: {portfolio}", bid)
             self.assertEqual(bid.count(portfolio), 1)
             self.assertIn("https://docs.example.com/reference", bid)
