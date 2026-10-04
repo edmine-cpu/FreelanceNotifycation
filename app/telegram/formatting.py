@@ -16,7 +16,8 @@ def _category_label(value: str) -> str:
     return value
 
 
-def format_project_notification(project: Project) -> str:
+def format_project_notification(project: Project, maybe_note: str | None = None) -> str:
+    """maybe_note is set when the AI filter is unsure; "" means no reason given."""
     parts = [f'🆕 <a href="{html.escape(project.url, quote=True)}"><b>{html.escape(project.title)}</b></a>']
 
     if project.budget:
@@ -41,6 +42,8 @@ def format_project_notification(project: Project) -> str:
         if project.category_url:
             category = f'<a href="{html.escape(project.category_url, quote=True)}">{category}</a>'
         parts.append(f"📂 {category}")
+    if maybe_note is not None:
+        parts.append("🤔 <i>Под вопросом" + (f": {html.escape(maybe_note)}" if maybe_note else "") + "</i>")
     return "\n\n".join(parts)
 
 

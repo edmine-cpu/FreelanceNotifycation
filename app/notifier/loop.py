@@ -53,6 +53,8 @@ class NotifierLoop:
         self._settings = settings
         self._screener = screener if ai_allowed(user_id) else None
         self._ai_allowed = ai_allowed(user_id)
+        # project id -> note for orders the primary check marked "maybe".
+        self._screen_notes: dict[str, str] = {}
 
     async def run(self, stop_event: asyncio.Event) -> None:
         log.info("starting notifier loop, interval=%ss", self._settings.poll_interval)
@@ -254,13 +256,16 @@ class NotifierLoop:
         result = await self._screener.screen(project)
         if not result.allowed:
             log.info(
-                "primary check skipped project %s (stack=%s): %s",
-                project.id, result.stack or "?", project.title,
+                "primary check skipped project %s (stack=%s, reason=%s): %s",
+                project.id, result.stack or "?", getattr(result, "reason", "") or "?", project.title,
             )
+        elif getattr(result, "tier", "") == "maybe":
+            self._screen_notes[project.id] = getattr(result, "reason", "")
         return result.allowed
 
     async def _send_project(self, project: Project) -> bool:
-        text = formatting.format_project_notification(project)
+        text = formatting.format_project_notification(
+            project, maybe_note=self._screen_notes.pop(project.id, None))
         try:
             await self._bot.send_message(
                 chat_id=self._settings.telegram_chat_id,

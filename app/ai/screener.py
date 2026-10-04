@@ -14,14 +14,18 @@ from .project_text import normalize_project_text
 log = logging.getLogger(__name__)
 SCREEN_PROMPT_FILE = Path(__file__).parent / "prompts" / "screen_prompt.md"
 SCREEN_SCHEMA = {"type": "object", "properties": {
-    "decision": {"type": "string", "enum": ["allow", "skip"]}, "stack": {"type": "string"}},
-    "required": ["decision", "stack"], "additionalProperties": False}
+    "decision": {"type": "string", "enum": ["core", "maybe", "skip"]}, "stack": {"type": "string"},
+    "reason": {"type": "string"}},
+    "required": ["decision", "stack", "reason"], "additionalProperties": False}
 
 
 @dataclass(frozen=True)
 class ScreenResult:
     allowed: bool
     stack: str = ""
+    # "core" = profile match, "maybe" = shown with a note, "skip" = hidden.
+    tier: str = ""
+    reason: str = ""
 
 
 class OrderScreener:
@@ -37,7 +41,7 @@ class OrderScreener:
 
     async def screen(self, project: Project) -> ScreenResult:
         require_ai_access(self.user_id)
-        key = fingerprint("screen-v2", self.user_id, project.id, normalize_project_text(project.title),
+        key = fingerprint("screen-v3", self.user_id, project.id, normalize_project_text(project.title),
                           normalize_project_text(project.description), self._system_prompt, getattr(self._client, "cache_identity", []))
         context = AIRequest(self.user_id, project.id, "screen", uuid.uuid4().hex)
         async def work():
@@ -53,7 +57,8 @@ class OrderScreener:
                 response = await self._client.generate(system_instruction=self._system_prompt,
                     messages=[ChatMessage("user", payload)], context=context, schema=SCREEN_SCHEMA)
                 result = _parse_verdict(response.text)
-                self.store.save(self.user_id, key, {"allowed": result.allowed, "stack": result.stack})
+                self.store.save(self.user_id, key, {"allowed": result.allowed, "stack": result.stack,
+                                                    "tier": result.tier, "reason": result.reason})
                 self.store.finish(context.operation_id, "success")
                 return result
             except Exception as exc:
@@ -68,8 +73,9 @@ class OrderScreener:
 
 def _parse_verdict(raw: str) -> ScreenResult:
     data = json.loads(raw)
-    if (not isinstance(data, dict) or set(data) != {"decision", "stack"}
-            or data["decision"] not in ("allow", "skip") or not isinstance(data["stack"], str)
-            or len(data["stack"]) > 200):
+    if (not isinstance(data, dict) or set(data) != {"decision", "stack", "reason"}
+            or data["decision"] not in ("core", "maybe", "skip")
+            or not isinstance(data["stack"], str) or len(data["stack"]) > 200
+            or not isinstance(data["reason"], str) or len(data["reason"]) > 200):
         raise ValueError("invalid screen decision")
-    return ScreenResult(data["decision"] == "allow", data["stack"])
+    return ScreenResult(data["decision"] != "skip", data["stack"], data["decision"], data["reason"])
