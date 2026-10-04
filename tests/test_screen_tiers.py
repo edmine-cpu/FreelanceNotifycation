@@ -61,5 +61,34 @@ class StartupRebuildTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(screener.screen.await_count, 3)
 
 
+class AutoBidTests(unittest.IsolatedAsyncioTestCase):
+    async def test_core_orders_get_a_ready_bid_reply(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock
+        from app.ai.policy import AI_OWNER_ID
+        from app.notifier import loop as loop_module
+        from app.notifier.loop import NotifierLoop
+
+        for uid, tier, expected in [(AI_OWNER_ID, "core", True), (AI_OWNER_ID, "maybe", False), (101, "core", False)]:
+            with self.subTest(uid=uid, tier=tier):
+                bot = AsyncMock()
+                bot.send_message.return_value = SimpleNamespace(message_id=555)
+                generator = Mock(generate_bid=AsyncMock(return_value={"rendered": "Здравствуйте.", "version": "v1"}))
+                screener = Mock(screen=AsyncMock(return_value=SimpleNamespace(allowed=True, tier=tier, reason="")))
+                notifier = NotifierLoop(bot, Mock(), Mock(), SimpleNamespace(telegram_chat_id="1", ai_auto_bid=True),
+                                        screener=screener, bid_generator=generator, user_id=uid)
+                await notifier._passes_primary_check(project())
+                self.assertTrue(await notifier._send_project(project()))
+                await asyncio.gather(*list(loop_module._BACKGROUND))
+                self.assertEqual(generator.generate_bid.await_count, int(expected))
+                self.assertEqual(bot.send_message.await_count, 1 + int(expected))
+                if expected:
+                    reply = bot.send_message.await_args_list[1].kwargs
+                    self.assertEqual((reply["text"], reply["reply_to_message_id"]), ("Здравствуйте.", 555))
+                    buttons = [b.callback_data for row in reply["reply_markup"].inline_keyboard for b in row]
+                    self.assertIn("sent:1", buttons)
+
+
 if __name__ == "__main__":
     unittest.main()

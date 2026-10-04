@@ -1,12 +1,13 @@
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import replace
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 
-from app.ai import BidGenerator, OrderScreener
+from app.ai import BidGenerationError, BidGenerator, OrderScreener
 from app.ai.policy import ai_allowed
 from app.config import Settings, build_category, parse_skill_ids
 from app.projects import Project
@@ -15,6 +16,9 @@ from app.storage import StateStore
 from app.telegram import formatting, keyboards
 
 log = logging.getLogger(__name__)
+
+# Auto-generated bids run after the notification; keep references until done.
+_BACKGROUND: set[asyncio.Task] = set()
 
 
 def _group_by_skill(projects: list[Project]) -> dict[int, list[Project]]:
@@ -46,6 +50,7 @@ class NotifierLoop:
         screener: OrderScreener | None = None,
         bid_generator: BidGenerator | None = None,
         user_id: int | None = None,
+        bid_generator_factory: Callable[[], BidGenerator | None] | None = None,
     ) -> None:
         self._bot = bot
         self._store = store
@@ -55,6 +60,11 @@ class NotifierLoop:
         self._ai_allowed = ai_allowed(user_id)
         # project id -> note for orders the primary check marked "maybe".
         self._screen_notes: dict[str, str] = {}
+        # project id -> screening tier; "core" orders get a ready bid right away.
+        self._screen_tiers: dict[str, str] = {}
+        self._bid_generator = bid_generator if ai_allowed(user_id) else None
+        # Created lazily, only when a "core" order actually needs a bid.
+        self._bid_generator_factory = bid_generator_factory if ai_allowed(user_id) else None
 
     async def run(self, stop_event: asyncio.Event) -> None:
         log.info("starting notifier loop, interval=%ss", self._settings.poll_interval)
@@ -268,13 +278,14 @@ class NotifierLoop:
             )
         elif getattr(result, "tier", "") == "maybe":
             self._screen_notes[project.id] = getattr(result, "reason", "")
+        self._screen_tiers[project.id] = getattr(result, "tier", "")
         return result.allowed
 
     async def _send_project(self, project: Project) -> bool:
         text = formatting.format_project_notification(
             project, maybe_note=self._screen_notes.pop(project.id, None))
         try:
-            await self._bot.send_message(
+            message = await self._bot.send_message(
                 chat_id=self._settings.telegram_chat_id,
                 text=text,
                 reply_markup=keyboards.notification_keyboard(project.id, ai_enabled=self._ai_allowed),
@@ -287,5 +298,31 @@ class NotifierLoop:
             log.exception("failed to send project %s", project.id)
             return False
         log.info("sent project %s: %s", project.id, project.title)
-
+        if (self._screen_tiers.pop(project.id, "") == "core"
+                and getattr(self._settings, "ai_auto_bid", False)):
+            generator = self._bid_generator
+            if generator is None and self._bid_generator_factory is not None:
+                generator = self._bid_generator_factory()
+            if generator is not None:
+                task = asyncio.create_task(
+                    self._auto_bid(generator, project, getattr(message, "message_id", None)))
+                _BACKGROUND.add(task)
+                task.add_done_callback(_BACKGROUND.discard)
         return True
+
+    async def _auto_bid(self, generator: BidGenerator, project: Project, reply_to: int | None) -> None:
+        """Generate the bid for a matching order and reply to its notification,
+        so it can be copied without waiting for a button press."""
+        try:
+            result = await generator.generate_bid(project, operation_id=f"auto:{project.id}")
+            await self._bot.send_message(
+                chat_id=self._settings.telegram_chat_id,
+                text=result["rendered"],
+                parse_mode=None,
+                reply_to_message_id=reply_to,
+                reply_markup=keyboards.regen_bid_keyboard(project.id, result["version"]),
+            )
+        except BidGenerationError as exc:
+            log.warning("auto bid skipped for project %s: %s", project.id, exc)
+        except Exception:
+            log.exception("auto bid failed for project %s", project.id)

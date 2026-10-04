@@ -120,9 +120,11 @@ class PublicNotifier:
                         replace(p, category_name=categories[p.skill_id].name)
                         for p in projects if p.skill_id in categories
                     ]
+                    owner = ai_allowed(user.user_id)
                     notifier = NotifierLoop(
                         self._bot, user.store, self._source, settings,
-                        screener=self._legacy_screener if ai_allowed(user.user_id) else None,
+                        screener=self._legacy_screener if owner else None,
+                        bid_generator_factory=(lambda user=user: self._generator_factory(user)) if owner else None,
                         user_id=user.user_id,
                     )
                     await notifier._tick(selected, successful_skills & categories.keys())
