@@ -69,7 +69,7 @@ class MigrationTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first, second)
         self.assertEqual(first, same_update)
         self.assertEqual(len(self.calls), 1)
-        self.assertIn("3000 грн, 1-2", first["rendered"])
+        self.assertIn("3000 грн, срок 1-2", first["rendered"])
         self.assertNotIn("Никита", first["rendered"])
         self.assertIn(f"Портфолио: {self.profile['portfolio_url']}", first["rendered"])
         restarted_store = AIStore(self.root / "ai.sqlite3")
@@ -151,7 +151,7 @@ class MigrationTest(unittest.IsolatedAsyncioTestCase):
             self.enqueue(tier=tier)
             result = await self.generator.generate_bid(project(str(index)))
             self.assertEqual(result["quote"]["tier"], tier)
-            self.assertEqual("Ориентировочные цена" in result["rendered"], tier != "omit")
+            self.assertEqual("начну сегодня" in result["rendered"], tier != "omit")
         invalid = ["oops", '{}', '{"scope_tier":"12","prose":"Hello"}',
             '{"scope_tier":4,"prose":"Hello"}', '{"scope_tier":"4","prose":""}',
             '{"scope_tier":"4","prose":"Hello","extra":1}', '{"scope_tier":"4","prose":"Цена 900 USD"}']

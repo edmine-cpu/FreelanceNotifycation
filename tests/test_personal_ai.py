@@ -183,7 +183,7 @@ class PersonalBidGeneratorTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("https://docs.example.com/reference", bid)
             self.assertNotIn("outdated.example", bid)
             self.assertNotIn("Ірина", bid)
-            self.assertTrue(bid.splitlines()[-1].startswith("Орієнтовні ціна, строки:"))
+            self.assertTrue(bid.splitlines()[-1].startswith("Ціна "))
 
     async def test_default_constructor_uses_generic_prompt_and_no_owner_examples(self) -> None:
         client = _Client()

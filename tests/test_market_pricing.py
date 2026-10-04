@@ -135,7 +135,7 @@ class CombinedGenerationTests(unittest.IsolatedAsyncioTestCase):
         generator = BidGenerator(client, user_id=AI_OWNER_ID, ai_store=store,
                                  rates_provider=StaticRatesSource(RATES))
         result = await generator.generate_bid(project("3800 UAH", "77"))
-        self.assertIn("9500 грн, 5-7 календарных дней", result["rendered"])
+        self.assertIn("Цена 9500 грн, срок 5-7 дней, начну сегодня. Пишите", result["rendered"])
         system, schema = client.calls[0]
         self.assertIn("Не предлагай разбивку на этапы", system)
         self.assertIn("crm (CRM", system)

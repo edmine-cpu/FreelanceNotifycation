@@ -174,7 +174,7 @@ class RenderingTest(unittest.TestCase):
         rendered = render_bid(prose, self._quote(), "ru")
 
         self.assertIn("Привет - готов сделать проект", rendered)
-        self.assertIn("Ориентировочные цена, сроки: 1500 грн, 1-2 календарных дня.", rendered)
+        self.assertIn("Цена 1500 грн, срок 1-2 дня, начну сегодня. Пишите", rendered)
         self.assertNotIn("999", rendered)
         self.assertNotIn("3 дня", rendered)
         self.assertNotIn("По срокам", rendered)
@@ -203,7 +203,7 @@ class RenderingTest(unittest.TestCase):
         self.assertIn("Пишите, обсудим детали", rendered)
         self.assertEqual(
             rendered.splitlines()[-1],
-            "Ориентировочные цена, сроки: 1500 грн, 1-2 календарных дня.",
+            "Цена 1500 грн, срок 1-2 дня, начну сегодня. Пишите",
         )
 
     def test_concrete_render_preserves_domain_price_nouns(self) -> None:
@@ -245,7 +245,7 @@ class RenderingTest(unittest.TestCase):
         self.assertNotIn("Предлагаю 5000", rendered)
         self.assertEqual(
             rendered.splitlines()[-1],
-            "Ориентировочные цена, сроки: 1500 грн, 1-2 календарных дня.",
+            "Цена 1500 грн, срок 1-2 дня, начну сегодня. Пишите",
         )
 
     def test_vague_render_removes_questions_and_adds_neutral_invitation(self) -> None:
@@ -260,15 +260,15 @@ class RenderingTest(unittest.TestCase):
 
         self.assertEqual(
             rendered,
-            "Похожую механику уже собирал - проблем не будет\n\n"
-            "Пишите, обсудим детали в личке",
+            "Похожую механику уже собирал - проблем не будет\n"
+            "Пишите, обсудим детали",
         )
         self.assertNotIn("?", rendered)
 
     def test_quote_line_uses_one_fixed_number(self) -> None:
         line = format_quote_line(self._quote(), "ru")
 
-        self.assertEqual(line, "Ориентировочные цена, сроки: 1500 грн, 1-2 календарных дня.")
+        self.assertEqual(line, "Цена 1500 грн, срок 1-2 дня, начну сегодня. Пишите")
 
     def test_every_supported_unicode_dash_collapses_to_ascii(self) -> None:
         self.assertEqual(normalize_dashes("a‐‑‒–—―−---b"), "a-b")
@@ -316,7 +316,7 @@ class QuotePersistenceTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(first.splitlines()[-1], second.splitlines()[-1])
             self.assertEqual(estimator.calls, 1)
             self.assertEqual(rates.calls, 1)
-            self.assertIn("6000 грн, 2-3", first)
+            self.assertIn("6000 грн, срок 2-3", first)
             self.assertNotIn("—", first)
             self.assertNotIn("--", second)
             target = json.loads(client.calls[0]["messages"][-1].text)

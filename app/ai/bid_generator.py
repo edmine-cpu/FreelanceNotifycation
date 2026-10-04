@@ -232,10 +232,11 @@ def _with_profile(rendered: str, profile: dict[str, str], language: Language) ->
         return rendered
     # The pricing renderer normalizes dashes. Insert the profile afterwards so
     # URLs containing e.g. a double hyphen survive byte-for-byte unchanged.
-    body, separator, closing = rendered.rpartition("\n\n")
+    # The price/closing line stays last; the portfolio goes right above it.
+    body, separator, closing = rendered.rpartition("\n")
     if not separator:
-        return rendered + "\n\n" + "\n".join(signature)
-    return f"{body}\n\n" + "\n".join(signature) + f"\n\n{closing}"
+        return rendered + "\n" + "\n".join(signature)
+    return f"{body}\n" + "\n".join(signature) + f"\n{closing}"
 
 
 def detect_language(text: str) -> Language:

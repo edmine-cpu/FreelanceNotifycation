@@ -535,13 +535,9 @@ def render_bid(prose: str, quote: PricingQuote, language: Language) -> str:
     if not body:
         raise ValueError("model prose is empty after pricing sanitization")
     if quote.omitted:
-        closing = (
-            "Пишите, обсудим детали в личке"
-            if language == "ru"
-            else "Пишіть, обговоримо деталі в особистих повідомленнях"
-        )
-        return normalize_dashes(f"{body}\n\n{closing}")
-    return normalize_dashes(f"{body}\n\n{format_quote_line(quote, language)}")
+        closing = "Пишите, обсудим детали" if language == "ru" else "Пишіть, обговоримо деталі"
+        return normalize_dashes(f"{body}\n{closing}")
+    return normalize_dashes(f"{body}\n{format_quote_line(quote, language)}")
 
 
 def format_quote_line(quote: PricingQuote, language: Language) -> str:
@@ -551,8 +547,9 @@ def format_quote_line(quote: PricingQuote, language: Language) -> str:
     currency = _CURRENCY_LABELS[quote.currency]
     start, end = (int(item) for item in quote.deadline.split("-", 1))
     days = _calendar_days(start, end, language)
-    prefix = "Ориентировочные цена, сроки" if language == "ru" else "Орієнтовні ціна, строки"
-    return f"{prefix}: {amount} {currency}, {quote.deadline} {days}."
+    if language == "ru":
+        return f"Цена {amount} {currency}, срок {quote.deadline} {days}, начну сегодня. Пишите"
+    return f"Ціна {amount} {currency}, строк {quote.deadline} {days}, почну сьогодні. Пишіть"
 
 
 def _fx_snapshot(rates: dict[str, float | Decimal]) -> dict[str, str]:
@@ -574,11 +571,10 @@ def _format_decimal(value: Decimal) -> str:
 
 
 def _calendar_days(start: int, end: int, language: Language) -> str:
+    few = end % 10 in (2, 3, 4) and end % 100 not in (12, 13, 14)
     if language == "ua":
-        noun = "календарні дні" if end % 10 in (2, 3, 4) and end % 100 not in (12, 13, 14) else "календарних днів"
-    else:
-        noun = "календарных дня" if end % 10 in (2, 3, 4) and end % 100 not in (12, 13, 14) else "календарных дней"
-    return noun
+        return "дні" if few else "днів"
+    return "дня" if few else "дней"
 
 
 def _atomic_write(path: Path, payload: bytes) -> None:
