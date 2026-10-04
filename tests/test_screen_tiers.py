@@ -30,5 +30,36 @@ class ScreenTierTests(unittest.TestCase):
         self.assertIn("🤔 <i>Под вопросом</i>", formatting.format_project_notification(project(), maybe_note=""))
 
 
+class StartupRebuildTests(unittest.IsolatedAsyncioTestCase):
+    async def test_owner_stored_projects_rescreened_on_start(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, Mock
+        from app.ai.policy import AI_OWNER_ID
+        from app.notifier.public import PublicNotifier
+
+        def item(pid):
+            return Project(pid, "", pid, "", "", "", "", 0, skill_id=180)
+
+        stored = [item("old-core"), item("old-skip"), item("open")]
+        verdict = {"old-core": True, "old-skip": False, "open": True}
+        screener = Mock(screen=AsyncMock(side_effect=lambda p: SimpleNamespace(allowed=verdict[p.id])))
+
+        def user(uid):
+            store = Mock(add_projects=AsyncMock(), set_passed=AsyncMock(),
+                         recent_projects=AsyncMock(return_value=stored))
+            return SimpleNamespace(user_id=uid, store=store,
+                                   settings=AsyncMock(return_value=SimpleNamespace(categories=[])))
+
+        owner, other = user(AI_OWNER_ID), user(101)
+        registry = Mock(users=AsyncMock(return_value=[other, owner]))
+        source = Mock(fetch_projects=AsyncMock(return_value=[item("open")]))
+        notifier = PublicNotifier(AsyncMock(), registry, source, SimpleNamespace(poll_interval=60),
+                                  Mock(), screener)
+        await notifier._rebuild_owner_filter()
+        owner.store.set_passed.assert_awaited_once_with(["old-core", "open"])
+        other.store.set_passed.assert_not_awaited()
+        self.assertEqual(screener.screen.await_count, 3)
+
+
 if __name__ == "__main__":
     unittest.main()

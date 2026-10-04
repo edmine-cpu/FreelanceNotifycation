@@ -84,12 +84,19 @@ class NotifierLoop:
             return
         if projects:
             await self._store.add_projects(projects)
+        # Re-screen everything the /start lists can show, not only open orders,
+        # so the 📂 view follows the current prompt.
+        projects = await self._store.recent_projects()
         log.info("filter rebuild: screening %d projects (once at startup)…", len(projects))
         started = time.monotonic()
-        passed: list[str] = []
-        for project in projects:
-            if (await self._screener.screen(project)).allowed:
-                passed.append(project.id)
+        slots = asyncio.Semaphore(8)
+
+        async def allowed(project: Project) -> bool:
+            async with slots:
+                return (await self._screener.screen(project)).allowed
+
+        verdicts = await asyncio.gather(*(allowed(project) for project in projects))
+        passed = [project.id for project, ok in zip(projects, verdicts) if ok]
         await self._store.set_passed(passed)
         log.info(
             "filter rebuild done in %.1fs: %d/%d projects passed the primary check",
