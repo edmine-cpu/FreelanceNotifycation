@@ -14,6 +14,7 @@ CALLBACK_SKIP_PREFIX = "ai_skip:"
 CALLBACK_CANCEL_AI_PREFIX = "ai_cancel:"
 CALLBACK_RETRY_AI_PREFIX = "ai_retry:"
 CALLBACK_AI_USAGE = "ai_usage"
+CALLBACK_BID_SENT_PREFIX = "sent:"
 CALLBACK_SETTINGS = "settings"
 CALLBACK_ADD_CATEGORY = "settings:add_category"
 CALLBACK_CATEGORY_NAMES = "settings:category_names"
@@ -236,6 +237,7 @@ def regen_bid_keyboard(project_id: str, version: str = "") -> InlineKeyboardMark
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="Новый вариант", callback_data=f"{CALLBACK_REGEN_PREFIX}{project_id}:{version}")],
+            [InlineKeyboardButton(text="📤 Отправил ставку", callback_data=f"{CALLBACK_BID_SENT_PREFIX}{project_id}")],
             [InlineKeyboardButton(text=HIDE_BUTTON_TEXT, callback_data=CALLBACK_HIDE)],
         ]
     )

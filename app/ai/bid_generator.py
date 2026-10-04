@@ -11,7 +11,7 @@ from .policy import require_ai_access
 from .store import AIStore, fingerprint
 from .project_text import normalize_project_text
 from .pricing import (
-    ALLOWED_TIERS, DEFAULT_HOURLY_RATE_USD, InMemoryQuoteStore, Language,
+    ALLOWED_TIERS, BID_TIERS, DEFAULT_HOURLY_RATE_USD, InMemoryQuoteStore, Language,
     PricingEngine, PricingQuote, QuoteService, QuoteStore, RatesSource, ScopeEstimator,
     StaticRatesSource, SCOPE_PROMPT_FILE, input_fingerprint, render_bid,
 )
@@ -36,7 +36,7 @@ _PERSONAL_IDENTITY_RE = re.compile(
 )
 _UA_ONLY_LETTERS = set("іїєґІЇЄҐ")
 BID_SCHEMA = {"type": "object", "properties": {
-    "scope_tier": {"type": "string", "enum": sorted(ALLOWED_TIERS)},
+    "scope_tier": {"type": "string", "enum": sorted(BID_TIERS)},
     "prose": {"type": "string"}}, "required": ["scope_tier", "prose"], "additionalProperties": False}
 PROSE_SCHEMA = {"type": "object", "properties": {"prose": {"type": "string"}},
                 "required": ["prose"], "additionalProperties": False}
@@ -111,6 +111,8 @@ class BidGenerator:
             "Напиши содержательную часть отклика без подписи, имени автора, портфолио, "
             "цены, бюджета, часов и сроков: программа добавляет портфолио, цену и сроки сама. "
             "Имя автора не добавляй. Не придумывай опыт. "
+            "Не предлагай разбивку на этапы и не упоминай этапы, если заказчик сам не просит "
+            "этапы в описании проекта. "
             "Текущий профиль — единственный достоверный источник личности: "
             + json.dumps(profile or {}, ensure_ascii=False)
         )
@@ -145,8 +147,9 @@ class BidGenerator:
                 if combined:
                     tiers = SCOPE_PROMPT_FILE.read_text(encoding="utf-8")
                     tiers = "\n".join(line for line in tiers.splitlines() if line.startswith("- "))
-                    system += "\nОцени объём разработки: \n" + tiers + (
-                        "\nВерни JSON с scope_tier и prose. Не объясняй оценку. Если сомневаешься между omit и числом, выбирай omit. Если scope_tier=omit, "
+                    system += "\nОцени тип и размер работы: \n" + tiers + (
+                        "\nВерни JSON с scope_tier (например bot:M или crm:L) и prose. Не объясняй оценку. "
+                        "omit ставь только когда задачи в описании нет совсем. Если scope_tier=omit, "
                         "не задавай уточняющие вопросы и не обещай цену/срок; программа добавит приглашение обсудить детали."
                     )
                 else:
@@ -190,6 +193,7 @@ class BidGenerator:
                           "rendered": rendered, "prose": prose, "quote": quote.to_dict(), "language": lang}
                 self.store.save(self.user_id, key, result)
                 self.store.finish(operation_id, "success", result)
+                self.store.log_bid(self.user_id, project, quote.to_dict())
                 return result
             except Exception:
                 self.store.validation_failed(operation_id)

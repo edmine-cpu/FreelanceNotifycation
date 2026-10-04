@@ -16,15 +16,21 @@ from app.projects import Project
 
 log = logging.getLogger(__name__)
 
-ScopeTier = Literal["omit", "4", "8", "16", "24", "40", "80"]
+# "omit", a legacy hour count ("8") or "<work type>:<size>" ("crm:L").
+ScopeTier = str
 Language = Literal["ru", "ua"]
 
 ALLOWED_HOURS = (4, 8, 16, 24, 40, 80)
-ALLOWED_TIERS = {"omit", *(str(hours) for hours in ALLOWED_HOURS)}
-POLICY_VERSION = "quote-v1"
+WORK_TYPES = ("bot", "parsing", "integration", "ai", "crm", "site", "fix", "other")
+SIZES = ("S", "M", "L", "XL")
+# Tiers the model may return now. Hour tiers stay valid for stored quotes.
+BID_TIERS = {"omit", *(f"{kind}:{size}" for kind in WORK_TYPES for size in SIZES)}
+ALLOWED_TIERS = BID_TIERS | {str(hours) for hours in ALLOWED_HOURS}
+POLICY_VERSION = "quote-v2"
 DEFAULT_HOURLY_RATE_USD = Decimal("8")
 DEFAULT_RATES = {"UAH": Decimal("43"), "EUR": Decimal("0.92"), "PLN": Decimal("4")}
 SCOPE_PROMPT_FILE = Path(__file__).parent / "prompts" / "scope_prompt.md"
+PRICE_TABLE_FILE = Path(__file__).parent / "prompts" / "price_table.json"
 
 _STEPS = {
     "UAH": Decimal("500"),
@@ -157,7 +163,7 @@ class PricingQuote:
         tier = str(raw.get("tier", ""))
         if tier not in ALLOWED_TIERS:
             raise ValueError("invalid pricing tier")
-        hours = None if tier == "omit" else int(tier)
+        hours = int(tier) if tier.isdigit() else None
         raw_amount = raw.get("amount")
         amount = None if raw_amount is None else Decimal(str(raw_amount))
         currency = raw.get("currency")
@@ -270,10 +276,12 @@ class AtomicQuoteStore:
 
 
 class PricingEngine:
-    def __init__(self, hourly_rate_usd: Decimal = DEFAULT_HOURLY_RATE_USD) -> None:
+    def __init__(self, hourly_rate_usd: Decimal = DEFAULT_HOURLY_RATE_USD,
+                 table: dict | None = None) -> None:
         if hourly_rate_usd <= 0:
             raise ValueError("hourly rate must be positive")
         self._hourly_rate_usd = Decimal(hourly_rate_usd)
+        self._table = table if table is not None else load_price_table()
 
     @property
     def hourly_rate_usd(self) -> Decimal:
@@ -300,6 +308,8 @@ class PricingEngine:
                 input_fingerprint=fingerprint,
             )
 
+        if not tier.isdigit():
+            return self._table_quote(project, tier, fx, fingerprint)
         hours = int(tier)
         budget_amount, budget_currency = parse_budget(project.budget)
         currency = budget_currency if budget_currency in _STEPS else "UAH"
@@ -324,6 +334,48 @@ class PricingEngine:
             policy_version=POLICY_VERSION,
             input_fingerprint=fingerprint,
         )
+
+
+    def _table_quote(self, project: Project, tier: str, fx: dict[str, str],
+                     fingerprint: str) -> PricingQuote:
+        """Market price for the work type and size, anchored to the client's
+        budget: never below it, equal to it when we are close, capped above."""
+        kind, size = tier.split(":", 1)
+        budget_amount, budget_currency = parse_budget(project.budget)
+        currency = budget_currency if budget_currency in _STEPS else "UAH"
+        price_uah = Decimal(str(self._table["prices_uah"][kind][size]))
+        rate = Decimal(fx[currency]) / Decimal(fx["UAH"])
+        amount = round_up(price_uah * rate, _STEPS[currency])
+        if budget_amount is not None and budget_currency == currency:
+            rules = self._table["budget"]
+            if amount <= budget_amount * Decimal(str(rules["match_up_to"])):
+                amount = budget_amount
+            else:
+                cap = round_up(budget_amount * Decimal(str(rules["max_over"])), _STEPS[currency])
+                amount = max(min(amount, cap), budget_amount)
+        deadlines = self._table["deadlines"]
+        deadline = deadlines.get(kind, deadlines["default"])[size]
+        return PricingQuote(
+            tier=tier,
+            hours=None,
+            amount=amount,
+            currency=currency,
+            deadline=deadline,
+            fx_snapshot=fx,
+            hourly_rate_usd=self._hourly_rate_usd,
+            policy_version=POLICY_VERSION,
+            input_fingerprint=fingerprint,
+        )
+
+
+def load_price_table(path: Path = PRICE_TABLE_FILE) -> dict:
+    table = json.loads(path.read_text(encoding="utf-8"))
+    for kind in WORK_TYPES:
+        for size in SIZES:
+            if Decimal(str(table["prices_uah"][kind][size])) <= 0:
+                raise ValueError(f"price for {kind}:{size} must be positive")
+            table["deadlines"].get(kind, table["deadlines"]["default"])[size].split("-", 1)
+    return table
 
 
 class QuoteService:

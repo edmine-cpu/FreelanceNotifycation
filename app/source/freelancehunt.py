@@ -76,6 +76,22 @@ class FreelancehuntSource:
             category = build_category(skill_id)
         return await self._fetch_category(category)
 
+    async def my_login(self) -> str:
+        """Login of the account that owns the API token."""
+        async with self._request_slots:
+            resp = await self._client.get("/my/profile")
+        resp.raise_for_status()
+        return resp.json()["data"]["attributes"]["login"]
+
+    async def project_outcome(self, project_id: str) -> tuple[int, str | None]:
+        """(status id, chosen freelancer login or None) for a project."""
+        async with self._request_slots:
+            resp = await self._client.get(f"/projects/{project_id}")
+        resp.raise_for_status()
+        attrs = resp.json()["data"]["attributes"]
+        winner = attrs.get("freelancer") or {}
+        return int((attrs.get("status") or {}).get("id") or 0), winner.get("login")
+
     async def _fetch_category(self, category: Category) -> list[Project]:
         params = {
             "filter[skill_id]": category.skill_id,

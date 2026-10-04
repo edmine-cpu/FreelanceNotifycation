@@ -80,11 +80,82 @@ class AIStore:
             project_id TEXT NOT NULL, previous TEXT NOT NULL, target INTEGER NOT NULL,
             expires REAL NOT NULL, status TEXT NOT NULL, corrections TEXT,
             result TEXT, UNIQUE(user_id, origin));
+          CREATE TABLE IF NOT EXISTS bid_log (
+            user_id INTEGER NOT NULL, project_id TEXT NOT NULL, title TEXT NOT NULL,
+            url TEXT NOT NULL, tier TEXT NOT NULL, amount TEXT, currency TEXT,
+            budget TEXT NOT NULL, created REAL NOT NULL, sent INTEGER NOT NULL DEFAULT 0,
+            outcome TEXT NOT NULL DEFAULT 'open', winner TEXT, checked REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY(user_id, project_id));
         """)
         self.flights: dict[str, asyncio.Task] = {}
 
     def close(self):
         self.db.close()
+
+    # Bid outcome log: what price we generated and whether the order was won.
+    def log_bid(self, user_id: int, project, quote: dict) -> None:
+        with self.db:
+            self.db.execute(
+                "INSERT INTO bid_log(user_id,project_id,title,url,tier,amount,currency,budget,created) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(user_id,project_id) DO UPDATE SET "
+                "tier=excluded.tier, amount=excluded.amount, currency=excluded.currency, budget=excluded.budget",
+                (user_id, project.id, project.title, project.url, quote["tier"], quote.get("amount"),
+                 quote.get("currency"), project.budget, time.time()))
+
+    def mark_bid_sent(self, user_id: int, project_id: str) -> bool:
+        with self.db:
+            cur = self.db.execute("UPDATE bid_log SET sent=1 WHERE user_id=? AND project_id=?",
+                                  (user_id, project_id))
+        return cur.rowcount == 1
+
+    def bids_to_check(self, user_id: int, now: float | None = None, max_age_days: int = 30,
+                      min_interval: float = 1800) -> list[dict]:
+        now = now or time.time()
+        rows = self.db.execute(
+            "SELECT * FROM bid_log WHERE user_id=? AND outcome='open' AND created>? AND checked<? "
+            "ORDER BY checked LIMIT 50", (user_id, now - max_age_days * 86400, now - min_interval))
+        return [dict(row) for row in rows]
+
+    def set_bid_outcome(self, user_id: int, project_id: str, outcome: str, winner: str | None,
+                        now: float | None = None) -> None:
+        with self.db:
+            self.db.execute("UPDATE bid_log SET outcome=?, winner=?, checked=? WHERE user_id=? AND project_id=?",
+                            (outcome, winner, now or time.time(), user_id, project_id))
+
+    def bid_stats(self, user_id: int) -> str:
+        require_ai_access(user_id)
+        rows = [dict(r) for r in self.db.execute("SELECT * FROM bid_log WHERE user_id=?", (user_id,))]
+        if not rows:
+            return "Пока нет сгенерированных ставок."
+        sent = [r for r in rows if r["sent"]]
+        base = sent or rows
+        label = "отправленным" if sent else "всем сгенерированным (кнопку «Отправил» ещё не нажимали)"
+
+        def line(name: str, items: list[dict]) -> str:
+            won = sum(r["outcome"] == "won" for r in items)
+            lost = sum(r["outcome"] == "lost" for r in items)
+            other = sum(r["outcome"] == "closed" for r in items)
+            pending = sum(r["outcome"] == "open" for r in items)
+            decided = won + lost
+            rate = f"{won * 100 // decided}%" if decided else "—"
+            return f"{name}: {len(items)} ставок, выиграно {won}, другому {lost}, закрыто {other}, ждут {pending}, винрейт {rate}"
+
+        def budget_bucket(row: dict) -> str:
+            from .pricing import parse_budget
+            budget, currency = parse_budget(row["budget"])
+            if budget is None or row["amount"] is None or currency != row["currency"]:
+                return "без бюджета"
+            return "= бюджету" if Decimal(row["amount"]) == budget else "выше бюджета"
+
+        lines = [f"Статистика по {label} ставкам", line("Всего", base), "", "По типу работы:"]
+        for kind in sorted({r["tier"].split(":")[0] for r in base}):
+            lines.append(line(kind, [r for r in base if r["tier"].split(":")[0] == kind]))
+        lines += ["", "По цене относительно бюджета:"]
+        for bucket in ("= бюджету", "выше бюджета", "без бюджета"):
+            items = [r for r in base if budget_bucket(r) == bucket]
+            if items:
+                lines.append(line(bucket, items))
+        return "\n".join(lines)
 
     def recover_interrupted(self):
         """Call once at application startup, before starting any AI tasks."""

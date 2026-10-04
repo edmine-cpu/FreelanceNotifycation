@@ -8,6 +8,7 @@ from app.ai import BidGenerator, AnthropicClient, OrderScreener
 from app.ai.policy import AI_OWNER_ID, ai_allowed
 from app.ai.store import AIStore
 from app.ai.pricing import AtomicQuoteStore
+from app.notifier.outcomes import OutcomeTracker
 from app.notifier.public import PublicNotifier
 from app.rates import RatesProvider
 from app.source import FreelancehuntSource
@@ -84,6 +85,9 @@ async def run(settings: Settings) -> None:
         name="updates-polling",
     )
     notifier_task = asyncio.create_task(notifier.run(stop_event), name="notifier")
+    # Best-effort: a failing outcome check never stops the bot.
+    tracker_task = asyncio.create_task(
+        OutcomeTracker(bot, source, ai_store, AI_OWNER_ID).run(stop_event), name="bid-outcomes")
 
     stop_task = asyncio.create_task(stop_event.wait(), name="shutdown-wait")
     done, _ = await asyncio.wait(
@@ -102,7 +106,8 @@ async def run(settings: Settings) -> None:
         except Exception:
             log.exception("task %s exited with error", task.get_name())
 
-    await asyncio.gather(polling_task, notifier_task, return_exceptions=True)
+    tracker_task.cancel()
+    await asyncio.gather(polling_task, notifier_task, tracker_task, return_exceptions=True)
     stop_task.cancel()
 
     pending = list(ai_store.flights.values())

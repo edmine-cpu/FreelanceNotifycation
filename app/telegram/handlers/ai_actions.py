@@ -163,6 +163,26 @@ async def usage_callback(callback: CallbackQuery, settings: Settings, ai_store: 
     await callback.message.answer(ai_store.report(callback.from_user.id, settings.ai_cost_timezone), parse_mode=None)
 
 
+@router.callback_query(F.data.startswith(keyboards.CALLBACK_BID_SENT_PREFIX))
+async def bid_sent(callback: CallbackQuery, ai_store: AIStore):
+    if not await _guard(callback, need_generator=False):
+        return
+    project_id = callback.data[len(keyboards.CALLBACK_BID_SENT_PREFIX):]
+    if ai_store.mark_bid_sent(callback.from_user.id, project_id):
+        await callback.answer("Отмечено. Сообщу, когда заказчик выберет исполнителя.")
+    else:
+        await callback.answer("Ставка не найдена в журнале", show_alert=True)
+
+
+@router.message(Command("bid_stats"))
+async def bid_stats_command(message: Message, ai_store: AIStore, state: FSMContext):
+    await state.clear()
+    if not _identity(message):
+        await message.answer(ACCESS_DENIED)
+        return
+    await message.answer(ai_store.bid_stats(message.from_user.id), parse_mode=None)
+
+
 @router.message()
 async def correction_message(message: Message, settings: Settings, store: StateStore,
                              bid_generator: BidGenerator | None, ai_store: AIStore):
