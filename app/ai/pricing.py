@@ -496,25 +496,31 @@ def normalize_dashes(text: str) -> str:
 
 
 def sanitize_prose(text: str, *, vague: bool) -> str:
+    """Keep the model's lines minus pricing leaks and questions; every kept
+    line becomes its own paragraph separated by a blank line."""
     kept: list[str] = []
     for raw_line in normalize_dashes(text).splitlines():
         line = raw_line.strip()
-        if not line:
-            if kept and kept[-1] != "":
-                kept.append("")
+        line = _without_questions(line)
+        if not line or contains_quote_leakage(line):
             continue
-        if contains_quote_leakage(line):
-            continue
-        if vague and (
-            _QUESTION_RE.search(line)
-            or _CLARIFICATION_RE.search(line)
-            or _CLOSING_RE.search(line)
-        ):
+        if vague and (_CLARIFICATION_RE.search(line) or _CLOSING_RE.search(line)):
             continue
         kept.append(line)
-    while kept and kept[-1] == "":
-        kept.pop()
-    return "\n".join(kept).strip()
+    return "\n\n".join(kept)
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
+_QUESTION_LABEL_RE = re.compile(r"(?i)^\s*(?:вопрос|питання|question)\s*:")
+
+
+def _without_questions(line: str) -> str:
+    """Drop question sentences (and "Вопрос:" lines), keeping the rest of the line."""
+    sentences = _SENTENCE_SPLIT_RE.split(line)
+    return " ".join(
+        sentence for sentence in sentences
+        if sentence and not _QUESTION_RE.search(sentence) and not _QUESTION_LABEL_RE.match(sentence)
+    ).strip()
 
 
 def contains_quote_leakage(line: str) -> bool:
@@ -536,8 +542,8 @@ def render_bid(prose: str, quote: PricingQuote, language: Language) -> str:
         raise ValueError("model prose is empty after pricing sanitization")
     if quote.omitted:
         closing = "Пишите, обсудим детали" if language == "ru" else "Пишіть, обговоримо деталі"
-        return normalize_dashes(f"{body}\n{closing}")
-    return normalize_dashes(f"{body}\n{format_quote_line(quote, language)}")
+        return normalize_dashes(f"{body}\n\n{closing}")
+    return normalize_dashes(f"{body}\n\n{format_quote_line(quote, language)}")
 
 
 def format_quote_line(quote: PricingQuote, language: Language) -> str:

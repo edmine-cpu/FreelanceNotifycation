@@ -260,7 +260,7 @@ class RenderingTest(unittest.TestCase):
 
         self.assertEqual(
             rendered,
-            "Похожую механику уже собирал - проблем не будет\n"
+            "Похожую механику уже собирал - проблем не будет\n\n"
             "Пишите, обсудим детали",
         )
         self.assertNotIn("?", rendered)

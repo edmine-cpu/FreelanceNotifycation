@@ -57,6 +57,13 @@ class TablePricingTests(unittest.TestCase):
         legacy = self.quote("8")
         self.assertEqual(legacy.hours, 8)
 
+    def test_paragraphs_and_no_questions(self):
+        from app.ai.pricing import render_bid
+        prose = "Здравствуйте.\nСделаю бота записи на Python. Есть документация?\nВопрос: оплата нужна\nПохожий бот уже работает у клиента."
+        rendered = render_bid(prose, self.quote("bot:M"), "ru")
+        self.assertEqual(rendered, "Здравствуйте.\n\nСделаю бота записи на Python.\n\nПохожий бот уже работает у клиента."
+                                   "\n\nЦена 3500 грн, срок 2-3 дня, начну сегодня. Пишите")
+
     def test_ukrainian_quote_line_uses_termin(self):
         from app.ai.pricing import format_quote_line
         line = format_quote_line(self.quote("bot:M"), "ua")
