@@ -57,6 +57,12 @@ class TablePricingTests(unittest.TestCase):
         legacy = self.quote("8")
         self.assertEqual(legacy.hours, 8)
 
+    def test_ukrainian_quote_line_uses_termin(self):
+        from app.ai.pricing import format_quote_line
+        line = format_quote_line(self.quote("bot:M"), "ua")
+        self.assertEqual(line, "Ціна 3500 грн, термін 2-3 дні, почну сьогодні. Пишіть")
+        self.assertNotIn("строк", line)
+
     def test_table_file_is_complete(self):
         table = load_price_table()
         self.assertEqual(set(table["prices_uah"]), {t.split(":")[0] for t in BID_TIERS if t != "omit"})

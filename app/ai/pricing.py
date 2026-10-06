@@ -549,7 +549,7 @@ def format_quote_line(quote: PricingQuote, language: Language) -> str:
     days = _calendar_days(start, end, language)
     if language == "ru":
         return f"Цена {amount} {currency}, срок {quote.deadline} {days}, начну сегодня. Пишите"
-    return f"Ціна {amount} {currency}, строк {quote.deadline} {days}, почну сьогодні. Пишіть"
+    return f"Ціна {amount} {currency}, термін {quote.deadline} {days}, почну сьогодні. Пишіть"
 
 
 def _fx_snapshot(rates: dict[str, float | Decimal]) -> dict[str, str]:
